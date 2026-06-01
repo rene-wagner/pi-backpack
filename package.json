@@ -1,0 +1,30 @@
+{
+  "name": "pi-subagent",
+  "version": "1.0.0",
+  "description": "Pi package providing a subagent orchestration skill and extension.",
+  "type": "module",
+  "scripts": {
+    "check-types": "tsc --noEmit"
+  },
+  "keywords": [
+    "pi-package",
+    "pi-skill",
+    "pi-extension"
+  ],
+  "license": "MIT",
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions"
+    ],
+    "skills": [
+      "./skills"
+    ]
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3"
+  }
+}
