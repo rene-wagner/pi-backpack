@@ -2,6 +2,7 @@ import { runSubagent } from "./runner.js";
 import type {
   ResolvedSubagentTask,
   RunSubagentResult,
+  SubagentTask,
   SubagentMode,
   SubagentParams,
   SubagentUpdate,
@@ -13,9 +14,9 @@ export function resolveSubagentTasks(
   defaultCwd: string,
 ): { mode: SubagentMode; tasks: ResolvedSubagentTask[] } {
   const mode = params.mode ?? "single";
-  const rawTasks = params.agents?.length
+  const rawTasks: SubagentTask[] = params.agents?.length
     ? params.agents
-    : params.task
+    : "task" in params && params.task
       ? [{ task: params.task }]
       : [];
 

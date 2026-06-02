@@ -23,7 +23,8 @@ export function registerSubagentTool(pi: ExtensionAPI) {
       "Use subagent when a task benefits from an isolated context window or independent investigation.",
       "Use subagent mode=parallel for independent investigations that can run at the same time.",
       "Use subagent mode=chain when each agent should build on previous subagent outputs.",
-      "Keep subagent tasks self-contained and include all context each subagent needs.",
+      "Keep subagent tasks self-contained and include role, goal, scope, constraints, and expected output.",
+      "Prefer least-privilege, read-only tools for review tasks; do not delegate edits unless the user explicitly requested delegated implementation.",
     ],
     parameters: SubagentParamsSchema,
 
