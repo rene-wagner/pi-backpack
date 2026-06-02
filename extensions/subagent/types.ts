@@ -28,7 +28,25 @@ export const SubagentTaskSchema = Type.Object({
   ),
 });
 
-const SubagentDefaultParams = {
+export const SubagentParamsSchema = Type.Object({
+  mode: Type.Optional(
+    Type.Union([Type.Literal("single"), Type.Literal("parallel"), Type.Literal("chain")], {
+      description:
+        "Execution mode. Defaults to single. parallel and chain require agents[].",
+    }),
+  ),
+  task: Type.Optional(
+    Type.String({
+      description: "Task for a single subagent. Required unless agents[] is provided.",
+    }),
+  ),
+  agents: Type.Optional(
+    Type.Array(SubagentTaskSchema, {
+      minItems: 1,
+      description:
+        "Agents to run for parallel or chain mode. In single mode the first entry is used if task is omitted.",
+    }),
+  ),
   systemPrompt: Type.Optional(
     Type.String({ description: "Default extra system prompt for subagents." }),
   ),
@@ -43,46 +61,7 @@ const SubagentDefaultParams = {
   cwd: Type.Optional(
     Type.String({ description: "Default working directory for subagents." }),
   ),
-};
-
-export const SubagentParamsSchema = Type.Union([
-  Type.Object({
-    mode: Type.Optional(Type.Literal("single")),
-    task: Type.String({
-      description: "Task for a single subagent. Required unless agents[] is provided.",
-    }),
-    agents: Type.Optional(
-      Type.Array(SubagentTaskSchema, {
-        description: "Optional agent definitions. In single mode only the first entry is used.",
-      }),
-    ),
-    ...SubagentDefaultParams,
-  }),
-  Type.Object({
-    mode: Type.Optional(Type.Literal("single")),
-    agents: Type.Array(SubagentTaskSchema, {
-      minItems: 1,
-      description: "Agent definitions. In single mode only the first entry is used.",
-    }),
-    ...SubagentDefaultParams,
-  }),
-  Type.Object({
-    mode: Type.Union([Type.Literal("parallel"), Type.Literal("chain")], {
-      description:
-        "parallel runs all agents concurrently; chain runs agents sequentially and passes previous outputs forward.",
-    }),
-    agents: Type.Array(SubagentTaskSchema, {
-      minItems: 1,
-      description: "Agents to run for parallel or chain mode.",
-    }),
-    task: Type.Optional(
-      Type.String({
-        description: "Ignored when agents[] is provided; prefer one task per agents[] entry.",
-      }),
-    ),
-    ...SubagentDefaultParams,
-  }),
-]);
+});
 
 export type SubagentMode = Static<typeof SubagentModeSchema>;
 export type SubagentTask = Static<typeof SubagentTaskSchema>;

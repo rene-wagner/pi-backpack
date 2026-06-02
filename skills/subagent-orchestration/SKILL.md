@@ -1,6 +1,7 @@
 ---
 name: subagent-orchestration
-description: Use when a task benefits from isolated Pi subagents: multiple independent code areas, parallel review perspectives, large-context investigation, or chained analyze-plan-review workflows. Avoid for trivial direct answers or small tightly coordinated edits.
+description: Use this skill when a Pi Coding Agent task benefits from isolated subagents, especially for focused investigation, independent review, parallel analysis, or chained reasoning. It guides the agent in delegating subagent work, choosing single, parallel, or chained execution, applying least-privilege tool access, and synthesizing results while keeping the main agent responsible for workflow decisions, safety, and final communication.
+
 license: MIT
 ---
 
