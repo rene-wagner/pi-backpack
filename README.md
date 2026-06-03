@@ -1,10 +1,11 @@
-# pi-subagent
+# pi-backpack
 
-A Pi package that provides a subagent orchestration skill and extension.
+A Pi package that provides reusable Pi skills and extensions.
 
 ## Contents
 
 - `skills/subagent-orchestration/SKILL.md` — guides when and how to use `single`, `parallel`, and `chain` subagents.
+- `skills/git-worktrees/SKILL.md` — guides safe Git worktree creation, inspection, syncing, cleanup, and troubleshooting.
 - `extensions/subagent/` — registers the `subagent` tool.
 
 ## Prerequisites
@@ -26,19 +27,20 @@ npm test
 From this repository's parent directory:
 
 ```bash
-pi install ./pi-subagent
+pi install ./pi-backpack
 ```
 
 Or use it temporarily:
 
 ```bash
-pi -e ./pi-subagent
+pi -e ./pi-backpack
 ```
 
-Smoke test after installation:
+Smoke tests after installation:
 
 ```text
 Use subagent orchestration: run one read-only subagent to summarize this repository's README.
+Use git worktrees: list this repository's worktrees and summarize the current status.
 ```
 
 ## Subagent extension
@@ -136,6 +138,15 @@ Chained workflow:
 - **Unknown model**: remove `model` or use a model id configured in your Pi installation.
 - **Missing tools**: pass only tool ids available in the current Pi environment.
 - **No useful output**: make the subagent task self-contained and specify the expected output format.
+
+## Git worktrees skill
+
+The `git-worktrees` skill teaches Pi how to manage Git worktrees safely:
+
+- inspect repository, branch, and worktree state before changing anything
+- create isolated worktrees for new, existing, or remote branches
+- inspect, sync, move, repair, remove, and prune worktrees
+- protect uncommitted work and require explicit confirmation for destructive operations
 
 ## Subagent orchestration skill
 
