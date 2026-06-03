@@ -7,13 +7,24 @@ export const SubagentModeSchema = Type.Union([
   Type.Literal("chain"),
 ]);
 
+export const MAX_SUBAGENTS = 8;
+export const MAX_PARALLEL_SUBAGENTS = 4;
+export const MAX_OUTPUT_CHARS = 20_000;
+export const MAX_STDERR_CHARS = 8_000;
+export const MAX_BUFFER_CHARS = 65_536;
+export const MAX_MESSAGES = 20;
+
 export const SubagentTaskSchema = Type.Object({
   name: Type.Optional(
-    Type.String({ description: "Optional human-readable name for this subagent." }),
+    Type.String({
+      description: "Optional human-readable name for this subagent.",
+    }),
   ),
   task: Type.String({ description: "Task for this subagent." }),
   systemPrompt: Type.Optional(
-    Type.String({ description: "Optional extra system prompt for this subagent." }),
+    Type.String({
+      description: "Optional extra system prompt for this subagent.",
+    }),
   ),
   model: Type.Optional(
     Type.String({ description: "Optional Pi model id for this subagent." }),
@@ -24,25 +35,32 @@ export const SubagentTaskSchema = Type.Object({
     }),
   ),
   cwd: Type.Optional(
-    Type.String({ description: "Optional working directory for this subagent." }),
+    Type.String({
+      description: "Optional working directory for this subagent.",
+    }),
   ),
 });
 
 export const SubagentParamsSchema = Type.Object({
   mode: Type.Optional(
-    Type.Union([Type.Literal("single"), Type.Literal("parallel"), Type.Literal("chain")], {
-      description:
-        "Execution mode. Defaults to single. parallel and chain require agents[].",
-    }),
+    Type.Union(
+      [Type.Literal("single"), Type.Literal("parallel"), Type.Literal("chain")],
+      {
+        description:
+          "Execution mode. Defaults to single. parallel and chain require agents[].",
+      },
+    ),
   ),
   task: Type.Optional(
     Type.String({
-      description: "Task for a single subagent. Required unless agents[] is provided.",
+      description:
+        "Task for a single subagent. Required unless agents[] is provided.",
     }),
   ),
   agents: Type.Optional(
     Type.Array(SubagentTaskSchema, {
       minItems: 1,
+      maxItems: MAX_SUBAGENTS,
       description:
         "Agents to run for parallel or chain mode. In single mode the first entry is used if task is omitted.",
     }),

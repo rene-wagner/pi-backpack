@@ -2,7 +2,27 @@ import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { RunSubagentInput, RunSubagentResult } from "./types.js";
+import {
+  MAX_BUFFER_CHARS,
+  MAX_MESSAGES,
+  MAX_OUTPUT_CHARS,
+  MAX_STDERR_CHARS,
+  type RunSubagentInput,
+  type RunSubagentResult,
+} from "./types.js";
+
+function truncateText(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, maxChars)}\n\n[truncated ${text.length - maxChars} chars]`;
+}
+
+function appendCapped(
+  existing: string,
+  chunk: string,
+  maxChars: number,
+): string {
+  return truncateText(existing + chunk, maxChars);
+}
 
 function getPiInvocation(args: string[]): { command: string; args: string[] } {
   const currentScript = process.argv[1];
@@ -73,7 +93,7 @@ export async function runSubagent(
     args.push(input.task);
 
     const invocation = getPiInvocation(args);
-    return await new Promise((resolve, reject) => {
+    return await new Promise((resolve) => {
       const child = spawn(invocation.command, invocation.args, {
         cwd: input.cwd,
         stdio: ["ignore", "pipe", "pipe"],
@@ -84,6 +104,13 @@ export async function runSubagent(
       let stderr = "";
       let buffer = "";
       let aborted = false;
+      let settled = false;
+
+      const finish = (result: RunSubagentResult) => {
+        if (settled) return;
+        settled = true;
+        resolve(result);
+      };
 
       const processLine = (line: string) => {
         if (!line.trim()) return;
@@ -96,8 +123,11 @@ export async function runSubagent(
             event.type === "message_end" &&
             "message" in event
           ) {
-            messages.push(event.message);
-            const text = textFromAssistantMessage(event.message);
+            if (messages.length < MAX_MESSAGES) messages.push(event.message);
+            const text = truncateText(
+              textFromAssistantMessage(event.message),
+              MAX_OUTPUT_CHARS,
+            );
             if (text) {
               output = text;
               input.onUpdate?.(text);
@@ -109,29 +139,34 @@ export async function runSubagent(
       };
 
       child.stdout.on("data", (chunk) => {
-        buffer += chunk.toString();
+        buffer = appendCapped(buffer, chunk.toString(), MAX_BUFFER_CHARS);
         const lines = buffer.split("\n");
         buffer = lines.pop() ?? "";
         for (const line of lines) processLine(line);
       });
 
       child.stderr.on("data", (chunk) => {
-        stderr += chunk.toString();
+        stderr = appendCapped(stderr, chunk.toString(), MAX_STDERR_CHARS);
       });
 
-      child.on("error", reject);
+      child.on("error", (error) => {
+        finish({
+          name: input.name,
+          output,
+          stderr: appendCapped(stderr, error.message, MAX_STDERR_CHARS),
+          exitCode: 1,
+          messages,
+        });
+      });
       child.on("close", (code) => {
         if (buffer.trim()) processLine(buffer);
-        if (aborted) reject(new Error(`Subagent ${input.name} aborted`));
-        else {
-          resolve({
-            name: input.name,
-            output,
-            stderr,
-            exitCode: code ?? 0,
-            messages,
-          });
-        }
+        finish({
+          name: input.name,
+          output,
+          stderr,
+          exitCode: aborted ? 130 : (code ?? 0),
+          messages,
+        });
       });
 
       const abort = () => {

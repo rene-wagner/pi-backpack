@@ -36,7 +36,9 @@ export function registerSubagentTool(pi: ExtensionAPI) {
         ...(signal ? { signal } : {}),
         ...(onUpdate ? { onUpdate } : {}),
       });
-      const hasErrors = workflow.results.some((result) => result.exitCode !== 0);
+      const hasErrors = workflow.results.some(
+        (result) => result.exitCode !== 0,
+      );
 
       return {
         content: [{ type: "text", text: formatSummary(workflow) }],

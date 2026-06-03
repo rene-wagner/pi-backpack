@@ -4,7 +4,8 @@
   "description": "Pi package providing a subagent orchestration skill and extension.",
   "type": "module",
   "scripts": {
-    "check-types": "tsc --noEmit"
+    "check-types": "tsc --noEmit",
+    "test": "rm -rf .tmp-test && tsc --outDir .tmp-test --noEmit false && node --test .tmp-test/tests/*.test.js"
   },
   "keywords": [
     "pi-package",

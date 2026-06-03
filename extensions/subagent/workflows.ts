@@ -1,4 +1,5 @@
 import { runSubagent } from "./runner.js";
+import { MAX_PARALLEL_SUBAGENTS, MAX_SUBAGENTS } from "./types.js";
 import type {
   ResolvedSubagentTask,
   RunSubagentResult,
@@ -24,15 +25,24 @@ export function resolveSubagentTasks(
     name: task.name ?? `agent-${index + 1}`,
     task: task.task,
     cwd: task.cwd ?? params.cwd ?? defaultCwd,
-    ...(task.systemPrompt ?? params.systemPrompt
+    ...((task.systemPrompt ?? params.systemPrompt)
       ? { systemPrompt: task.systemPrompt ?? params.systemPrompt }
       : {}),
-    ...(task.model ?? params.model ? { model: task.model ?? params.model } : {}),
-    ...(task.tools ?? params.tools ? { tools: task.tools ?? params.tools } : {}),
+    ...((task.model ?? params.model)
+      ? { model: task.model ?? params.model }
+      : {}),
+    ...((task.tools ?? params.tools)
+      ? { tools: task.tools ?? params.tools }
+      : {}),
   }));
 
   if (tasks.length === 0) {
     throw new Error("subagent needs either task or agents[].");
+  }
+  if (tasks.length > MAX_SUBAGENTS) {
+    throw new Error(
+      `subagent supports at most ${MAX_SUBAGENTS} agents per call.`,
+    );
   }
   if (mode === "single" && tasks.length > 1) {
     return { mode, tasks: [tasks[0]!] };
@@ -63,20 +73,45 @@ function emitStatus(
   mode: SubagentMode,
   text: string,
 ) {
-  onUpdate?.({ content: [{ type: "text", text }], details: { mode, results: [] } });
+  onUpdate?.({
+    content: [{ type: "text", text }],
+    details: { mode, results: [] },
+  });
 }
 
 async function runOne(
   task: ResolvedSubagentTask,
-  options: { mode: SubagentMode; signal?: AbortSignal; onUpdate?: SubagentUpdate },
+  options: {
+    mode: SubagentMode;
+    signal?: AbortSignal;
+    onUpdate?: SubagentUpdate;
+  },
 ): Promise<RunSubagentResult> {
-  emitStatus(options.onUpdate, options.mode, `Spawning subagent ${task.name}...`);
-  return runSubagent({
-    ...task,
-    ...(options.signal ? { signal: options.signal } : {}),
-    onUpdate: (text) =>
-      emitStatus(options.onUpdate, options.mode, `## ${task.name}\n\n${text}`),
-  });
+  emitStatus(
+    options.onUpdate,
+    options.mode,
+    `Spawning subagent ${task.name}...`,
+  );
+  try {
+    return await runSubagent({
+      ...task,
+      ...(options.signal ? { signal: options.signal } : {}),
+      onUpdate: (text) =>
+        emitStatus(
+          options.onUpdate,
+          options.mode,
+          `## ${task.name}\n\n${text}`,
+        ),
+    });
+  } catch (error) {
+    return {
+      name: task.name,
+      output: "",
+      stderr: error instanceof Error ? error.message : String(error),
+      exitCode: 1,
+      messages: [],
+    };
+  }
 }
 
 async function runParallelSubagents(options: {
@@ -85,9 +120,19 @@ async function runParallelSubagents(options: {
   signal?: AbortSignal;
   onUpdate?: SubagentUpdate;
 }): Promise<WorkflowResult> {
-  const results = await Promise.all(
-    options.tasks.map((task) => runOne(task, options)),
-  );
+  const results = new Array<RunSubagentResult>(options.tasks.length);
+  let nextTaskIndex = 0;
+
+  async function worker() {
+    while (nextTaskIndex < options.tasks.length) {
+      const index = nextTaskIndex;
+      nextTaskIndex += 1;
+      results[index] = await runOne(options.tasks[index]!, options);
+    }
+  }
+
+  const workerCount = Math.min(MAX_PARALLEL_SUBAGENTS, options.tasks.length);
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
   return { mode: options.mode, results };
 }
 

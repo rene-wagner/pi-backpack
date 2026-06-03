@@ -18,6 +18,7 @@ For development, install dependencies first:
 ```bash
 npm install
 npm run check-types
+npm test
 ```
 
 ## Install locally
@@ -120,7 +121,10 @@ Chained workflow:
 
 ### Behavior and failure handling
 
-- `parallel` uses concurrent subagent processes.
+- A call accepts at most 8 subagents.
+- `parallel` runs at most 4 subagent processes concurrently.
+- Subagent stdout/stderr and assistant output are capped to avoid unbounded tool results.
+- Spawn, cwd, abort, and other subprocess failures are returned as that subagent's result instead of dropping all sibling results.
 - `chain` appends previous subagent outputs to later tasks and stops after the first non-zero exit code.
 - The final tool response includes each subagent name, exit code, and output or stderr.
 - If any subagent exits non-zero, the tool result is marked as an error.
