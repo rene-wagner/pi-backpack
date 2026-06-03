@@ -1,7 +1,7 @@
 {
-  "name": "pi-subagent",
+  "name": "pi-backpack",
   "version": "1.0.0",
-  "description": "Pi package providing a subagent orchestration skill and extension.",
+  "description": "Pi package providing some extensions.",
   "type": "module",
   "scripts": {
     "check-types": "tsc --noEmit",
