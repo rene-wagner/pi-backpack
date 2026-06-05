@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "check-types": "tsc --noEmit",
-    "test": "rm -rf .tmp-test && tsc --outDir .tmp-test --noEmit false && node --test .tmp-test/tests/*.test.js"
+    "test": "vitest run"
   },
   "keywords": [
     "pi-package",
@@ -34,6 +34,7 @@
     "@earendil-works/pi-tui": "^0.78.0",
     "@types/node": "^25.9.1",
     "typebox": "^1.1.39",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.8"
   }
 }

@@ -1,5 +1,4 @@
-import { test } from "node:test";
-import assert from "node:assert/strict";
+import { expect, test } from "vitest";
 import {
   buildDisplayOptions,
   createCancelledDetails,
@@ -12,7 +11,7 @@ test("normalizeOptions drops undefined optional fields", () => {
     { label: "B", value: "b", description: "second" },
   ]);
 
-  assert.deepEqual(options, [
+  expect(options).toEqual([
     { label: "A" },
     { label: "B", value: "b", description: "second" },
   ]);
@@ -21,15 +20,15 @@ test("normalizeOptions drops undefined optional fields", () => {
 test("buildDisplayOptions appends custom option only when allowText is true", () => {
   const base = [{ label: "A" }];
 
-  assert.deepEqual(buildDisplayOptions(base, false), [{ label: "A" }]);
-  assert.deepEqual(buildDisplayOptions(base, true), [
+  expect(buildDisplayOptions(base, false)).toEqual([{ label: "A" }]);
+  expect(buildDisplayOptions(base, true)).toEqual([
     { label: "A" },
     { label: "Write a custom answer.", isCustom: true },
   ]);
 });
 
 test("createCancelledDetails returns a cancelled result shape", () => {
-  assert.deepEqual(createCancelledDetails("Q?", [{ label: "A" }]), {
+  expect(createCancelledDetails("Q?", [{ label: "A" }])).toEqual({
     question: "Q?",
     options: [{ label: "A" }],
     answer: null,

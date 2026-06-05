@@ -1,5 +1,4 @@
-import { test } from "node:test";
-import assert from "node:assert/strict";
+import { expect, test } from "vitest";
 import { MAX_SUBAGENTS } from "../extensions/subagent/types.js";
 import { resolveSubagentTasks } from "../extensions/subagent/workflows.js";
 
@@ -26,8 +25,8 @@ test("resolveSubagentTasks applies defaults and per-agent overrides", () => {
     "/fallback",
   );
 
-  assert.equal(resolved.mode, "parallel");
-  assert.deepEqual(resolved.tasks, [
+  expect(resolved.mode).toBe("parallel");
+  expect(resolved.tasks).toEqual([
     {
       name: "a",
       task: "task a",
@@ -56,30 +55,27 @@ test("resolveSubagentTasks uses only the first agent in single mode", () => {
     "/repo",
   );
 
-  assert.equal(resolved.mode, "single");
-  assert.equal(resolved.tasks.length, 1);
-  assert.equal(resolved.tasks[0]?.task, "first");
+  expect(resolved.mode).toBe("single");
+  expect(resolved.tasks).toHaveLength(1);
+  expect(resolved.tasks[0]?.task).toBe("first");
 });
 
 test("resolveSubagentTasks rejects empty calls", () => {
-  assert.throws(
-    () => resolveSubagentTasks({}, "/repo"),
+  expect(() => resolveSubagentTasks({}, "/repo")).toThrow(
     /subagent needs either task or agents\[\]\./,
   );
 });
 
 test("resolveSubagentTasks rejects too many agents", () => {
-  assert.throws(
-    () =>
-      resolveSubagentTasks(
-        {
-          mode: "parallel",
-          agents: Array.from({ length: MAX_SUBAGENTS + 1 }, (_, index) => ({
-            task: `task ${index}`,
-          })),
-        },
-        "/repo",
-      ),
-    /supports at most/,
-  );
+  expect(() =>
+    resolveSubagentTasks(
+      {
+        mode: "parallel",
+        agents: Array.from({ length: MAX_SUBAGENTS + 1 }, (_, index) => ({
+          task: `task ${index}`,
+        })),
+      },
+      "/repo",
+    ),
+  ).toThrow(/supports at most/);
 });
