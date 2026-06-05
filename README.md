@@ -6,6 +6,7 @@ A Pi package that provides reusable Pi skills and extensions.
 
 - `skills/subagent-orchestration/SKILL.md` — guides when and how to use `single`, `parallel`, and `chain` subagents.
 - `skills/git-worktrees/SKILL.md` — guides safe Git worktree creation, inspection, syncing, cleanup, and troubleshooting.
+- `skills/code-review/SKILL.md` — guides structured code reviews for Gitea pull requests or local changes against `main`.
 - `extensions/subagent/` — registers the `subagent` tool.
 
 ## Prerequisites
@@ -41,6 +42,7 @@ Smoke tests after installation:
 ```text
 Use subagent orchestration: run one read-only subagent to summarize this repository's README.
 Use git worktrees: list this repository's worktrees and summarize the current status.
+Use code review: review local changes against main.
 ```
 
 ## Subagent extension
@@ -138,6 +140,15 @@ Chained workflow:
 - **Unknown model**: remove `model` or use a model id configured in your Pi installation.
 - **Missing tools**: pass only tool ids available in the current Pi environment.
 - **No useful output**: make the subagent task self-contained and specify the expected output format.
+
+## Code review skill
+
+The `code-review` skill teaches Pi how to perform structured reviews in two modes:
+
+- Gitea pull request review when the user provides a PR ID
+- local review against `main` when no PR ID is provided
+
+Findings are categorized as suggestion, todo, issue, nitpick, question, note, thought, discussion, or typo, and the skill includes review focus for PNPM, Docker, Renovate, Woodpecker, Helm, monorepos, Vue 2/3, Bootstrap 4/5, JavaScript/TypeScript, and SCSS.
 
 ## Git worktrees skill
 
