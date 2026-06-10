@@ -59,15 +59,54 @@ Supported modes:
 
 | Parameter | Required | Description |
 | --- | --- | --- |
+| `agent` | No | Custom agent name from the trusted project `.pi/agents/` directory for simple `single` calls. |
 | `mode` | No | `single`, `parallel`, or `chain`. Defaults to `single`. |
 | `task` | Required for simple `single` calls unless `agents[]` is provided | Task text for a one-off subagent. |
-| `agents` | Required for `parallel`/`chain` | Array of subagent definitions. In `single`, the first agent is used if `task` is omitted. |
+| `agents` | Required for `parallel`/`chain` | Array of subagent definitions. In `single`, the first agent is used if `task` is omitted. Each entry can set `agent` to use a custom agent profile. |
 | `systemPrompt` | No | Default extra system prompt inherited by agents without their own `systemPrompt`. |
 | `model` | No | Default Pi model id inherited by agents without their own `model`. |
 | `tools` | No | Default enabled tools inherited by agents without their own `tools`. Prefer the smallest read-only set needed. |
 | `cwd` | No | Default working directory inherited by agents without their own `cwd`. Defaults to the caller context cwd. |
 
-Each `agents[]` entry supports `name`, `task`, `systemPrompt`, `model`, `tools`, and `cwd`.
+Each `agents[]` entry supports `name`, `agent`, `task`, `systemPrompt`, `model`, `tools`, and `cwd`.
+
+### Project custom agents
+
+Trusted projects can define reusable subagent profiles as Markdown files in `.pi/agents/*.md`:
+
+```md
+---
+name: code-reviewer
+description: Reviews TypeScript changes for bugs, edge cases, and missing tests.
+tools: [read, bash]
+model: anthropic/claude-sonnet-4-5
+---
+
+You are a strict code reviewer.
+Do not edit files.
+Return concise findings with file paths.
+```
+
+The extension lists available custom agents in the main agent's system prompt. Use them with `agent`:
+
+```json
+{
+  "agent": "code-reviewer",
+  "task": "Review extensions/subagent for correctness and missing tests."
+}
+```
+
+Custom agent frontmatter fields:
+
+| Field | Required | Description |
+| --- | --- | --- |
+| `name` | Yes | Tool-call name for the custom agent. |
+| `description` | Yes | Routing hint shown to the main agent. |
+| `tools` | No | Enabled tools for the subagent, as YAML array or comma-separated string. |
+| `model` | No | Pi model id for the subagent. |
+| `cwd` | No | Default working directory for the subagent. |
+
+Explicit tool-call values override custom agent defaults. If both a custom agent prompt and an explicit `systemPrompt` are present, the explicit prompt is appended to the custom agent prompt.
 
 ### Examples
 
@@ -127,6 +166,7 @@ Chained workflow:
 
 - A call accepts at most 8 subagents.
 - `parallel` runs at most 4 subagent processes concurrently.
+- Project custom agents are discovered from the nearest `.pi/agents/` directory.
 - Subagent stdout/stderr and assistant output are capped to avoid unbounded tool results.
 - Spawn, cwd, abort, and other subprocess failures are returned as that subagent's result instead of dropping all sibling results.
 - `chain` appends previous subagent outputs to later tasks and stops after the first non-zero exit code.
@@ -137,6 +177,7 @@ Chained workflow:
 
 - **`pi` not found**: ensure the Pi CLI is installed and available in `PATH`.
 - **Wrong files inspected**: set `cwd` explicitly for the subagent or agent entry.
+- **Unknown custom agent**: check `.pi/agents/*.md` frontmatter has both `name` and `description`, and use the exact `name` value.
 - **Unknown model**: remove `model` or use a model id configured in your Pi installation.
 - **Missing tools**: pass only tool ids available in the current Pi environment.
 - **No useful output**: make the subagent task self-contained and specify the expected output format.

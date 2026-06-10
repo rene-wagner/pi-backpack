@@ -20,6 +20,12 @@ export const SubagentTaskSchema = Type.Object({
       description: "Optional human-readable name for this subagent.",
     }),
   ),
+  agent: Type.Optional(
+    Type.String({
+      description:
+        "Optional custom agent name from the trusted project .pi/agents directory.",
+    }),
+  ),
   task: Type.String({ description: "Task for this subagent." }),
   systemPrompt: Type.Optional(
     Type.String({
@@ -42,6 +48,12 @@ export const SubagentTaskSchema = Type.Object({
 });
 
 export const SubagentParamsSchema = Type.Object({
+  agent: Type.Optional(
+    Type.String({
+      description:
+        "Optional custom agent name from the trusted project .pi/agents directory for simple single-agent calls.",
+    }),
+  ),
   mode: Type.Optional(
     Type.Union(
       [Type.Literal("single"), Type.Literal("parallel"), Type.Literal("chain")],
@@ -89,6 +101,7 @@ export interface ResolvedSubagentTask {
   name: string;
   task: string;
   cwd: string;
+  agent?: string;
   systemPrompt?: string;
   model?: string;
   tools?: string[];

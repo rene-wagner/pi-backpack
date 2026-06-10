@@ -79,3 +79,82 @@ test("resolveSubagentTasks rejects too many agents", () => {
     ),
   ).toThrow(/supports at most/);
 });
+
+test("resolveSubagentTasks applies custom agent defaults", () => {
+  const resolved = resolveSubagentTasks(
+    {
+      agent: "reviewer",
+      task: "review this",
+    },
+    "/repo",
+    [
+      {
+        name: "reviewer",
+        description: "Reviews code.",
+        tools: ["read"],
+        model: "agent-model",
+        cwd: "/agent-cwd",
+        systemPrompt: "agent prompt",
+        filePath: "/repo/.pi/agents/reviewer.md",
+      },
+    ],
+  );
+
+  expect(resolved.tasks).toEqual([
+    {
+      name: "reviewer",
+      agent: "reviewer",
+      task: "review this",
+      cwd: "/agent-cwd",
+      model: "agent-model",
+      tools: ["read"],
+      systemPrompt: "agent prompt",
+    },
+  ]);
+});
+
+test("resolveSubagentTasks lets explicit values override custom agent defaults", () => {
+  const resolved = resolveSubagentTasks(
+    {
+      agents: [
+        {
+          name: "explicit-name",
+          agent: "reviewer",
+          task: "review this",
+          cwd: "/explicit-cwd",
+          model: "explicit-model",
+          tools: ["read", "bash"],
+          systemPrompt: "extra prompt",
+        },
+      ],
+    },
+    "/repo",
+    [
+      {
+        name: "reviewer",
+        description: "Reviews code.",
+        tools: ["read"],
+        model: "agent-model",
+        cwd: "/agent-cwd",
+        systemPrompt: "agent prompt",
+        filePath: "/repo/.pi/agents/reviewer.md",
+      },
+    ],
+  );
+
+  expect(resolved.tasks[0]).toEqual({
+    name: "explicit-name",
+    agent: "reviewer",
+    task: "review this",
+    cwd: "/explicit-cwd",
+    model: "explicit-model",
+    tools: ["read", "bash"],
+    systemPrompt: "agent prompt\n\nextra prompt",
+  });
+});
+
+test("resolveSubagentTasks rejects unknown custom agents", () => {
+  expect(() =>
+    resolveSubagentTasks({ agent: "missing", task: "work" }, "/repo", []),
+  ).toThrow(/Unknown custom agent "missing"/);
+});
