@@ -118,10 +118,44 @@ Shape:
 
 - `mode` defaults to `single`.
 - `single` needs `task` or at least one `agents[]` entry; if multiple agents are provided, only the first is used.
-- `parallel` and `chain` should use `agents[]` with one self-contained task per entry.
+- Use `agent` when a listed project custom agent from `.pi/agents/` clearly matches the delegated task.
+- `parallel` and `chain` should use `agents[]` with one self-contained task per entry; each entry can set `agent`.
 - Global `systemPrompt`, `model`, `tools`, and `cwd` values are defaults inherited by agents that do not override them.
-- Agent-level `systemPrompt`, `model`, `tools`, and `cwd` override global defaults.
+- Agent-level `systemPrompt`, `model`, `tools`, and `cwd` override global defaults and custom agent defaults.
 - Prefer minimal available read/search tools. Add shell/write tools only when the delegated task requires them.
+
+## Project Custom Agents
+
+When the system prompt lists available custom subagents, choose one only if its description matches the task. Custom agents are project-local Markdown profiles in `.pi/agents/*.md`; treat them as repo-controlled instructions.
+
+Example single custom agent call:
+
+```json
+{
+  "agent": "code-reviewer",
+  "task": "Review the changed subagent files for correctness and missing tests. Return concise findings."
+}
+```
+
+Example parallel custom agent call:
+
+```json
+{
+  "mode": "parallel",
+  "agents": [
+    {
+      "agent": "code-reviewer",
+      "task": "Review implementation correctness. Do not edit files."
+    },
+    {
+      "agent": "test-reviewer",
+      "task": "Identify missing tests for the same changes. Do not edit files."
+    }
+  ]
+}
+```
+
+Explicit task fields override the custom agent defaults. If you pass `systemPrompt`, it is appended to the custom agent's prompt.
 
 ## Task Prompt Template
 

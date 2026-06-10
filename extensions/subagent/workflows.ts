@@ -1,3 +1,4 @@
+import type { CustomAgentConfig } from "./agents.js";
 import { runSubagent } from "./runner.js";
 import { MAX_PARALLEL_SUBAGENTS, MAX_SUBAGENTS } from "./types.js";
 import type {
@@ -13,28 +14,52 @@ import type {
 export function resolveSubagentTasks(
   params: SubagentParams,
   defaultCwd: string,
+  customAgents: CustomAgentConfig[] = [],
 ): { mode: SubagentMode; tasks: ResolvedSubagentTask[] } {
   const mode = params.mode ?? "single";
   const rawTasks: SubagentTask[] = params.agents?.length
     ? params.agents
     : "task" in params && params.task
-      ? [{ task: params.task }]
+      ? [{ task: params.task, ...(params.agent ? { agent: params.agent } : {}) }]
       : [];
 
-  const tasks = rawTasks.map((task, index) => ({
-    name: task.name ?? `agent-${index + 1}`,
-    task: task.task,
-    cwd: task.cwd ?? params.cwd ?? defaultCwd,
-    ...((task.systemPrompt ?? params.systemPrompt)
-      ? { systemPrompt: task.systemPrompt ?? params.systemPrompt }
-      : {}),
-    ...((task.model ?? params.model)
-      ? { model: task.model ?? params.model }
-      : {}),
-    ...((task.tools ?? params.tools)
-      ? { tools: task.tools ?? params.tools }
-      : {}),
-  }));
+  const agentsByName = new Map(
+    customAgents.map((agent) => [agent.name, agent] as const),
+  );
+
+  const tasks = rawTasks.map((task, index) => {
+    const customAgentName = task.agent;
+    const customAgent = customAgentName
+      ? agentsByName.get(customAgentName)
+      : undefined;
+
+    if (customAgentName && !customAgent) {
+      const available = customAgents.map((agent) => agent.name).join(", ") || "none";
+      throw new Error(
+        `Unknown custom agent "${customAgentName}". Available custom agents: ${available}.`,
+      );
+    }
+
+    const extraSystemPrompt = task.systemPrompt ?? params.systemPrompt;
+    const systemPrompt = customAgent?.systemPrompt
+      ? extraSystemPrompt
+        ? `${customAgent.systemPrompt}\n\n${extraSystemPrompt}`
+        : customAgent.systemPrompt
+      : extraSystemPrompt;
+
+    const model = task.model ?? params.model ?? customAgent?.model;
+    const tools = task.tools ?? params.tools ?? customAgent?.tools;
+
+    return {
+      name: task.name ?? customAgent?.name ?? `agent-${index + 1}`,
+      task: task.task,
+      cwd: task.cwd ?? params.cwd ?? customAgent?.cwd ?? defaultCwd,
+      ...(customAgentName ? { agent: customAgentName } : {}),
+      ...(systemPrompt ? { systemPrompt } : {}),
+      ...(model ? { model } : {}),
+      ...(tools ? { tools } : {}),
+    };
+  });
 
   if (tasks.length === 0) {
     throw new Error("subagent needs either task or agents[].");
