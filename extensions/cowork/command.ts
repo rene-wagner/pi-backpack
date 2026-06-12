@@ -160,6 +160,8 @@ export function registerCoworkCommand(pi: ExtensionAPI) {
       `Model: ${job.model ?? "default"}`,
       `Tools: ${(job.tools ?? DEFAULT_COWORK_TOOLS).join(",")}`,
       `Timeout: ${job.timeoutMs ?? DEFAULT_COWORK_TIMEOUT_MS} ms`,
+      `Retry after: ${job.retryAfter ?? "default interval"}`,
+      `Max failures: ${job.maxFailures ?? "unlimited"}`,
       `Run on start: ${job.runOnStart === true}`,
       `Concurrency: ${job.concurrency ?? "skip"}`,
       `Created: ${job.createdAt}`,
@@ -229,6 +231,12 @@ export function registerCoworkCommand(pi: ExtensionAPI) {
       : DEFAULT_COWORK_TIMEOUT_MS;
     if (!Number.isFinite(timeoutMs) || timeoutMs <= 0)
       throw new Error("timeoutMs must be a positive number.");
+    const retryAfter = values.get("retryAfter");
+    if (retryAfter !== undefined) parseIntervalMs(retryAfter);
+    const maxFailures = values.has("maxFailures") ? Number(values.get("maxFailures")) : undefined;
+    if (maxFailures !== undefined && (!Number.isSafeInteger(maxFailures) || maxFailures <= 0)) {
+      throw new Error("maxFailures must be a positive integer.");
+    }
 
     const job: CoworkJob = {
       id,
@@ -241,6 +249,8 @@ export function registerCoworkCommand(pi: ExtensionAPI) {
         ? splitList(values.get("tools")!)
         : DEFAULT_COWORK_TOOLS,
       timeoutMs,
+      ...(retryAfter !== undefined ? { retryAfter } : {}),
+      ...(maxFailures !== undefined ? { maxFailures } : {}),
       runOnStart: values.get("runOnStart") === "true",
       concurrency: "skip",
       createdAt: now,
@@ -389,6 +399,16 @@ async function validateJob(job: CoworkJob) {
   if (job.timeoutMs !== undefined && (!Number.isFinite(job.timeoutMs) || job.timeoutMs <= 0)) {
     issues.push("timeoutMs must be a positive number");
   }
+  if (job.retryAfter !== undefined) {
+    try {
+      parseIntervalMs(job.retryAfter);
+    } catch (error) {
+      issues.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+  if (job.maxFailures !== undefined && (!Number.isSafeInteger(job.maxFailures) || job.maxFailures <= 0)) {
+    issues.push("maxFailures must be a positive integer");
+  }
   if ((job.concurrency ?? "skip") !== "skip") issues.push('MVP only supports concurrency="skip"');
 
   try {
@@ -404,7 +424,7 @@ async function validateJob(job: CoworkJob) {
 
 function applyJobValues(job: CoworkJob, values: Map<string, string>, defaultCwd: string) {
   for (const key of values.keys()) {
-    if (!["enabled", "every", "prompt", "cwd", "model", "tools", "timeoutMs", "runOnStart", "concurrency"].includes(key)) {
+    if (!["enabled", "every", "prompt", "cwd", "model", "tools", "timeoutMs", "retryAfter", "maxFailures", "runOnStart", "concurrency"].includes(key)) {
       throw new Error(`Unsupported cowork job field "${key}".`);
     }
   }
@@ -437,6 +457,23 @@ function applyJobValues(job: CoworkJob, values: Map<string, string>, defaultCwd:
     const parsed = Number(timeoutMs);
     if (!Number.isFinite(parsed) || parsed <= 0) throw new Error("timeoutMs must be a positive number.");
     job.timeoutMs = parsed;
+  }
+  const retryAfter = values.get("retryAfter");
+  if (retryAfter !== undefined) {
+    if (retryAfter === "" || retryAfter === "default" || retryAfter === "none") delete job.retryAfter;
+    else {
+      parseIntervalMs(retryAfter);
+      job.retryAfter = retryAfter;
+    }
+  }
+  const maxFailures = values.get("maxFailures");
+  if (maxFailures !== undefined) {
+    if (maxFailures === "" || maxFailures === "unlimited" || maxFailures === "none") delete job.maxFailures;
+    else {
+      const parsed = Number(maxFailures);
+      if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new Error("maxFailures must be a positive integer.");
+      job.maxFailures = parsed;
+    }
   }
   const enabled = values.get("enabled");
   if (enabled !== undefined) job.enabled = parseBoolean(enabled, "enabled");
@@ -516,8 +553,8 @@ function helpText() {
     "Usage:",
     "/cowork list",
     "/cowork show <id>",
-    '/cowork add <id> every=1h prompt="..." [cwd=.] [tools=read,grep,find,ls] [model=...] [runOnStart=true]',
-    '/cowork edit <id> every=1h prompt="..." [cwd=.] [tools=read,grep,find,ls] [model=...]',
+    '/cowork add <id> every=1h prompt="..." [cwd=.] [tools=read,grep,find,ls] [model=...] [retryAfter=10m] [maxFailures=5] [runOnStart=true]',
+    '/cowork edit <id> every=1h prompt="..." [cwd=.] [tools=read,grep,find,ls] [model=...] [retryAfter=10m] [maxFailures=5]',
     "/cowork validate [id]",
     "/cowork failures",
     "/cowork cleanup <id>|--all keep=20 [olderThan=30d] [dryRun=true]",

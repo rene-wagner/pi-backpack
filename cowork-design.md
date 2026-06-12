@@ -22,7 +22,7 @@ Beispiele:
 /cowork add
 /cowork list
 /cowork show daily-review
-/cowork edit daily-review model=sonnet:high every=1h
+/cowork edit daily-review model=sonnet:high every=1h retryAfter=10m maxFailures=5
 /cowork validate daily-review
 /cowork failures
 /cowork run daily-review
@@ -206,7 +206,7 @@ MVP: zunächst argumentbasiert oder interaktiv minimal.
 Mögliche einfache Syntax:
 
 ```text
-/cowork add daily-review every=24h cwd=. tools=read,grep,find,bash prompt="Review local changes"
+/cowork add daily-review every=24h retryAfter=30m maxFailures=5 cwd=. tools=read,grep,find,bash prompt="Review local changes"
 ```
 
 Wenn keine Argumente angegeben sind, kann später ein UI-Wizard folgen.
@@ -217,9 +217,22 @@ Aktualisiert einzelne Job-Felder, z. B.:
 
 ```text
 /cowork edit daily-review model=sonnet:high every=1h
+/cowork edit daily-review retryAfter=10m maxFailures=5
+/cowork edit daily-review retryAfter=none maxFailures=unlimited
 /cowork edit daily-review tools=read,grep,find,bash
 /cowork edit daily-review prompt="New prompt"
 ```
+
+### Retry / Backoff
+
+Optional kann ein Job eigene Retry-Regeln erhalten:
+
+```text
+retryAfter=10m
+maxFailures=5
+```
+
+Nach einem fehlgeschlagenen Run setzt `retryAfter` den nächsten Lauf auf Fehlerzeit + Intervall. `maxFailures` deaktiviert einen Job nach N aufeinanderfolgenden Fehlern automatisch.
 
 ### `/cowork validate [id]`
 
@@ -230,6 +243,8 @@ Prüft Job-Konfigurationen vor unbeaufsichtigten Läufen:
 - nicht leerer Prompt
 - mindestens ein Tool
 - valider Timeout
+- gültiges `retryAfter`
+- valides `maxFailures`
 - unterstützte Concurrency
 
 ### `/cowork failures`

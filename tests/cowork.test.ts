@@ -177,6 +177,37 @@ test("scheduler skips disabled jobs", async () => {
   expect((await loadState(paths)).jobs["daily-review"]?.lastRunAt).toBeUndefined();
 });
 
+test("scheduler applies retryAfter for failed runs", async () => {
+  const paths = getCoworkStorePaths(makeTempDir());
+  await saveJobs([makeJob({ retryAfter: "10m" })], paths);
+
+  const scheduler = new CoworkScheduler(paths, {
+    tickMs: 10,
+    runJob: async (job) => makeRunResult({ jobId: job.id, exitCode: 1, stderr: "Boom", finishedAt: "2026-06-12T11:00:00.000Z" }),
+  });
+
+  await scheduler.runNow("daily-review");
+  const state = await loadState(paths);
+  expect(state.jobs["daily-review"]?.nextRunAt).toBe("2026-06-12T11:10:00.000Z");
+});
+
+test("scheduler disables jobs after maxFailures", async () => {
+  const paths = getCoworkStorePaths(makeTempDir());
+  await saveJobs([makeJob({ maxFailures: 2 })], paths);
+  await saveState({ jobs: { "daily-review": { consecutiveFailures: 1 } } }, paths);
+
+  const scheduler = new CoworkScheduler(paths, {
+    tickMs: 10,
+    runJob: async (job) => makeRunResult({ jobId: job.id, exitCode: 1, stderr: "Boom" }),
+  });
+
+  await scheduler.runNow("daily-review");
+  const state = await loadState(paths);
+  expect(state.jobs["daily-review"]?.consecutiveFailures).toBe(2);
+  expect(state.jobs["daily-review"]?.lastError).toContain("Disabled after 2 consecutive failures");
+  expect((await loadJobs(paths))[0]?.enabled).toBe(false);
+});
+
 test("scheduler records failed injected runs", async () => {
   const paths = getCoworkStorePaths(makeTempDir());
   await saveJobs([makeJob()], paths);
@@ -228,7 +259,7 @@ test("cowork command adds, shows, and edits jobs", async () => {
   const agentDir = makeTempDir();
   const command = registerCoworkForTest(agentDir);
 
-  await command.run('add review every=1h cwd=. model=sonnet:high tools=read,grep prompt="Review local changes" runOnStart=true');
+  await command.run('add review every=1h cwd=. model=sonnet:high tools=read,grep retryAfter=10m maxFailures=3 prompt="Review local changes" runOnStart=true');
   let jobs = await loadJobs(getCoworkStorePaths(path.join(agentDir, "cowork")));
   expect(jobs[0]).toMatchObject({
     id: "review",
@@ -236,17 +267,23 @@ test("cowork command adds, shows, and edits jobs", async () => {
     model: "sonnet:high",
     tools: ["read", "grep"],
     prompt: "Review local changes",
+    retryAfter: "10m",
+    maxFailures: 3,
     runOnStart: true,
   });
 
   const showBefore = await command.run("show review");
   expect(showBefore).toContain("Model: sonnet:high");
+  expect(showBefore).toContain("Retry after: 10m");
+  expect(showBefore).toContain("Max failures: 3");
   expect(showBefore).toContain("Prompt:\nReview local changes");
 
-  await command.run('edit review every=2h model=default tools=read,find prompt="New prompt" enabled=false');
+  await command.run('edit review every=2h model=default tools=read,find retryAfter=none maxFailures=unlimited prompt="New prompt" enabled=false');
   jobs = await loadJobs(getCoworkStorePaths(path.join(agentDir, "cowork")));
   expect(jobs[0]).toMatchObject({ every: "2h", tools: ["read", "find"], prompt: "New prompt", enabled: false });
   expect(jobs[0]?.model).toBeUndefined();
+  expect(jobs[0]?.retryAfter).toBeUndefined();
+  expect(jobs[0]?.maxFailures).toBeUndefined();
 });
 
 test("cowork command validates jobs and reports failures", async () => {
@@ -256,8 +293,8 @@ test("cowork command validates jobs and reports failures", async () => {
 
   await saveJobs(
     [
-      makeJob({ id: "valid", cwd: agentDir, tools: ["read"] }),
-      makeJob({ id: "broken", cwd: path.join(agentDir, "missing"), every: "bad", prompt: "", tools: [] }),
+      makeJob({ id: "valid", cwd: agentDir, tools: ["read"], retryAfter: "10m", maxFailures: 3 }),
+      makeJob({ id: "broken", cwd: path.join(agentDir, "missing"), every: "bad", retryAfter: "bad", maxFailures: 0, prompt: "", tools: [] }),
     ],
     paths,
   );
@@ -279,6 +316,7 @@ test("cowork command validates jobs and reports failures", async () => {
   expect(validation).toContain("✓ valid: valid");
   expect(validation).toContain("✗ broken");
   expect(validation).toContain("Invalid interval");
+  expect(validation).toContain("maxFailures must be a positive integer");
   expect(validation).toContain("cwd does not exist");
 
   const failures = await command.run("failures");

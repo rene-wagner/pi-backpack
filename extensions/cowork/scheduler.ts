@@ -1,5 +1,5 @@
 import type { CoworkJob, CoworkJobState, CoworkSchedulerOptions, CoworkState, CoworkStorePaths } from "./types.js";
-import { loadJobs, loadState, saveRunResult, saveState } from "./store.js";
+import { loadJobs, loadState, saveJobs, saveRunResult, saveState } from "./store.js";
 import { runCoworkJob } from "./runner.js";
 
 const DEFAULT_TICK_MS = 30_000;
@@ -74,7 +74,8 @@ export class CoworkScheduler {
       try {
         const jobState = ensureJobState(state, job.id);
         const nextRunAt = computeNextRunAt(job, jobState);
-        if (jobState.nextRunAt !== nextRunAt && !jobState.running) {
+        const hasRetryNextRun = Boolean(job.retryAfter && jobState.consecutiveFailures > 0 && jobState.nextRunAt);
+        if (!hasRetryNextRun && jobState.nextRunAt !== nextRunAt && !jobState.running) {
           jobState.nextRunAt = nextRunAt;
           changed = true;
         }
@@ -125,19 +126,24 @@ export class CoworkScheduler {
       await saveRunResult(result, this.paths);
 
       jobState.lastRunAt = result.finishedAt;
-      jobState.nextRunAt = computeNextRunAt(job, jobState);
       jobState.lastExitCode = result.exitCode;
-      if (result.exitCode === 0) delete jobState.lastError;
-      else jobState.lastError = result.stderr || `Exit code ${result.exitCode}`;
-      jobState.consecutiveFailures = result.exitCode === 0 ? 0 : jobState.consecutiveFailures + 1;
+      if (result.exitCode === 0) {
+        delete jobState.lastError;
+        jobState.consecutiveFailures = 0;
+        jobState.nextRunAt = computeNextRunAt(job, jobState);
+      } else {
+        jobState.lastError = result.stderr || `Exit code ${result.exitCode}`;
+        jobState.consecutiveFailures += 1;
+        await applyFailurePolicy(job, jobState, this.paths, result.finishedAt);
+      }
       return result;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       jobState.lastRunAt = new Date().toISOString();
-      jobState.nextRunAt = computeNextRunAt(job, jobState);
       jobState.lastExitCode = 1;
       jobState.lastError = message;
       jobState.consecutiveFailures += 1;
+      await applyFailurePolicy(job, jobState, this.paths, jobState.lastRunAt);
       throw error;
     } finally {
       jobState.running = false;
@@ -150,6 +156,32 @@ export class CoworkScheduler {
   private logError(prefix: string, error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
     this.options.onLog?.(`${prefix}: ${message}`);
+  }
+}
+
+async function applyFailurePolicy(
+  job: CoworkJob,
+  jobState: CoworkJobState,
+  paths: CoworkStorePaths,
+  failedAt: string,
+) {
+  if (job.retryAfter) {
+    jobState.nextRunAt = new Date(Date.parse(failedAt) + parseIntervalMs(job.retryAfter)).toISOString();
+  } else {
+    jobState.nextRunAt = computeNextRunAt(job, jobState);
+  }
+
+  if (job.maxFailures !== undefined && jobState.consecutiveFailures >= job.maxFailures) {
+    job.enabled = false;
+    job.updatedAt = new Date().toISOString();
+    jobState.lastError = `Disabled after ${jobState.consecutiveFailures} consecutive failures. Last error: ${jobState.lastError ?? "unknown"}`;
+    const jobs = await loadJobs(paths);
+    const stored = jobs.find((candidate) => candidate.id === job.id);
+    if (stored) {
+      stored.enabled = false;
+      stored.updatedAt = job.updatedAt;
+      await saveJobs(jobs, paths);
+    }
   }
 }
 

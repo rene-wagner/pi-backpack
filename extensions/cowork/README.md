@@ -24,8 +24,8 @@ This is the foreground MVP. The scheduler only runs while the current Pi session
 /cowork status
 /cowork list
 /cowork show <id>
-/cowork add <id> every=<interval> prompt="..." [cwd=.] [tools=read,grep,find,ls] [model=...] [runOnStart=true]
-/cowork edit <id> every=<interval> prompt="..." [cwd=.] [tools=read,grep,find,ls] [model=...]
+/cowork add <id> every=<interval> prompt="..." [cwd=.] [tools=read,grep,find,ls] [model=...] [retryAfter=10m] [maxFailures=5] [runOnStart=true]
+/cowork edit <id> every=<interval> prompt="..." [cwd=.] [tools=read,grep,find,ls] [model=...] [retryAfter=10m] [maxFailures=5]
 /cowork validate [id]
 /cowork failures
 /cowork cleanup <id>|--all keep=20 [olderThan=30d] [dryRun=true]
@@ -66,6 +66,16 @@ The `model` value is passed to Pi as `--model <value>`, so model patterns such a
 
 Use `model=default`, `model=none`, or an empty `model=` value to remove the explicit model and use Pi's default model.
 
+## Retry and failure limits
+
+```text
+/cowork add flaky every=1h retryAfter=10m maxFailures=5 prompt="..."
+/cowork edit flaky retryAfter=30m maxFailures=3
+/cowork edit flaky retryAfter=none maxFailures=unlimited
+```
+
+When a run fails, `retryAfter` sets the next run to the failure time plus that interval. Without it, failures use the normal `every` interval. `maxFailures` automatically disables a job after that many consecutive failures.
+
 ## Validate jobs and inspect failures
 
 ```text
@@ -75,7 +85,7 @@ Use `model=default`, `model=none`, or an empty `model=` value to remove the expl
 /cowork status
 ```
 
-Validation checks interval syntax, cwd accessibility, prompt, tools, timeout, and supported concurrency. Status includes scheduler state, running jobs, failed jobs, and the next due jobs.
+Validation checks interval syntax, cwd accessibility, prompt, tools, timeout, retry settings, and supported concurrency. Status includes scheduler state, running jobs, failed jobs, and the next due jobs.
 
 ## Run a job manually
 
@@ -127,6 +137,8 @@ The scheduler checks for due jobs periodically. Stop it with:
 
 - `tools`: `read,grep,find,ls`
 - `timeoutMs`: 30 minutes
+- `retryAfter`: not set; failures use normal `every`
+- `maxFailures`: not set; jobs are not auto-disabled
 - `concurrency`: `skip`
 - `runOnStart`: `false`
 

@@ -9,6 +9,8 @@ export interface CoworkJob {
   model?: string;
   tools?: string[];
   timeoutMs?: number;
+  retryAfter?: string;
+  maxFailures?: number;
   runOnStart?: boolean;
   concurrency?: CoworkConcurrency;
   createdAt: string;
