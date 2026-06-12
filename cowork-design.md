@@ -21,7 +21,14 @@ Beispiele:
 ```text
 /cowork add
 /cowork list
+/cowork show daily-review
+/cowork edit daily-review model=sonnet:high every=1h retryAfter=10m maxFailures=5 notify=failures
+/cowork validate daily-review
+/cowork failures
 /cowork run daily-review
+/cowork runs daily-review
+/cowork last daily-review
+/cowork cleanup daily-review keep=20
 /cowork start
 /cowork stop
 /cowork status
@@ -188,6 +195,10 @@ Zeigt alle Jobs mit Status:
 - nächster Lauf
 - letzter Exit-Code
 
+### `/cowork show <id>`
+
+Zeigt die vollständige Job-Konfiguration, den Prompt und den letzten bekannten Status.
+
 ### `/cowork add`
 
 MVP: zunächst argumentbasiert oder interaktiv minimal.
@@ -195,10 +206,63 @@ MVP: zunächst argumentbasiert oder interaktiv minimal.
 Mögliche einfache Syntax:
 
 ```text
-/cowork add daily-review every=24h cwd=. tools=read,grep,find,bash prompt="Review local changes"
+/cowork add daily-review every=24h retryAfter=30m maxFailures=5 notify=failures cwd=. tools=read,grep,find,bash prompt="Review local changes"
 ```
 
 Wenn keine Argumente angegeben sind, kann später ein UI-Wizard folgen.
+
+### `/cowork edit <id> key=value...`
+
+Aktualisiert einzelne Job-Felder, z. B.:
+
+```text
+/cowork edit daily-review model=sonnet:high every=1h
+/cowork edit daily-review retryAfter=10m maxFailures=5 notify=failures
+/cowork edit daily-review retryAfter=none maxFailures=unlimited notify=never
+/cowork edit daily-review tools=read,grep,find,bash
+/cowork edit daily-review prompt="New prompt"
+```
+
+### Retry / Backoff
+
+Optional kann ein Job eigene Retry-Regeln erhalten:
+
+```text
+retryAfter=10m
+maxFailures=5
+```
+
+Nach einem fehlgeschlagenen Run setzt `retryAfter` den nächsten Lauf auf Fehlerzeit + Intervall. `maxFailures` deaktiviert einen Job nach N aufeinanderfolgenden Fehlern automatisch.
+
+### Notifications
+
+Optional kann ein Job Foreground-Session-Nachrichten senden:
+
+```text
+notify=never
+notify=failures
+notify=always
+```
+
+`notify=failures` meldet fehlgeschlagene Runs, `notify=always` jeden abgeschlossenen Run. Notifications erscheinen nur, während die Cowork-Extension in der aktuellen Pi-Session läuft.
+
+### `/cowork validate [id]`
+
+Prüft Job-Konfigurationen vor unbeaufsichtigten Läufen:
+
+- gültiges Intervall
+- existierendes und zugängliches `cwd`
+- nicht leerer Prompt
+- mindestens ein Tool
+- valider Timeout
+- gültiges `retryAfter`
+- valides `maxFailures`
+- valider `notify`-Modus
+- unterstützte Concurrency
+
+### `/cowork failures`
+
+Listet Jobs mit letzten Fehlern oder aufeinanderfolgenden Fehlschlägen.
 
 ### `/cowork run <id>`
 
@@ -220,9 +284,17 @@ Startet den Foreground-Scheduler in der aktuellen Pi-Session.
 
 Stoppt den Foreground-Scheduler. Bereits laufende Runs werden im MVP nicht hart abgebrochen, außer wir geben explizit ein AbortSignal weiter.
 
+### `/cowork runs <id>` / `/cowork last <id>`
+
+Listet die letzten Runs bzw. zeigt die letzte Run-Summary mit Output und stderr.
+
+### `/cowork cleanup <id>|--all keep=N [olderThan=30d] [dryRun=true]`
+
+Begrenzt die Run-Historie. `keep=N` behält die neuesten N Runs, `olderThan=<interval>` löscht ältere Runs, und `dryRun=true` zeigt nur, was gelöscht würde. Gelöscht werden Run-JSON und passende Markdown-Summary gemeinsam.
+
 ### `/cowork status`
 
-Zeigt Scheduler-Status:
+Zeigt Scheduler-Status, laufende Jobs, Fehler-Zusammenfassung und nächste fällige Jobs:
 
 - läuft / läuft nicht
 - Anzahl Jobs
@@ -254,7 +326,7 @@ Da Cowork unbeaufsichtigt laufen kann, gelten defensive Defaults:
 ## MVP Definition of Done
 
 - `extensions/cowork` existiert und ist im Package geladen.
-- `/cowork list`, `/cowork add`, `/cowork run`, `/cowork start`, `/cowork stop`, `/cowork status` funktionieren.
+- `/cowork list`, `/cowork add`, `/cowork show`, `/cowork edit`, `/cowork validate`, `/cowork failures`, `/cowork run`, `/cowork runs`, `/cowork last`, `/cowork cleanup`, `/cowork start`, `/cowork stop`, `/cowork status` funktionieren.
 - Jobs werden in `~/.pi/agent/cowork/jobs.json` gespeichert.
 - Runs werden als JSON und Markdown-Summary gespeichert.
 - Ein Job mit kurzem Intervall läuft automatisch im Foreground-Scheduler.

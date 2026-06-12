@@ -1,12 +1,17 @@
+import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { PassThrough } from "node:stream";
 import { afterEach, expect, test } from "vitest";
+import { registerCoworkCommand } from "../extensions/cowork/command.js";
+import { runCoworkJob, type SpawnCoworkProcess } from "../extensions/cowork/runner.js";
 import { CoworkScheduler, computeNextRunAt, isJobDue, parseIntervalMs } from "../extensions/cowork/scheduler.js";
-import { getCoworkStorePaths, loadJobs, loadState, saveJobs, saveRunResult, saveState } from "../extensions/cowork/store.js";
-import type { CoworkJob } from "../extensions/cowork/types.js";
+import { cleanupRunResults, getCoworkStorePaths, listRunResults, loadJobs, loadState, saveJobs, saveRunResult, saveState } from "../extensions/cowork/store.js";
+import type { CoworkJob, CoworkRunResult } from "../extensions/cowork/types.js";
 
 const tempDirs: string[] = [];
+const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
 
 function makeTempDir() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-cowork-test-"));
@@ -27,11 +32,98 @@ function makeJob(overrides: Partial<CoworkJob> = {}): CoworkJob {
   };
 }
 
+class FakeCoworkProcess extends EventEmitter {
+  stdout = new PassThrough();
+  stderr = new PassThrough();
+  killedWith: Array<NodeJS.Signals | number | undefined> = [];
+
+  kill(signal?: NodeJS.Signals | number) {
+    this.killedWith.push(signal);
+    this.emit("killed", signal);
+    return true;
+  }
+
+  close(code: number | null) {
+    this.emit("close", code);
+  }
+}
+
+function makeFakeSpawn(process: FakeCoworkProcess, calls: Array<{ command: string; args: string[]; cwd: string }> = []): SpawnCoworkProcess {
+  return (command, args, options) => {
+    calls.push({ command, args, cwd: options.cwd });
+    return process;
+  };
+}
+
+function makeRunResult(overrides: Partial<CoworkRunResult> = {}): CoworkRunResult {
+  return {
+    jobId: "daily-review",
+    startedAt: "2026-06-12T11:00:00.000Z",
+    finishedAt: "2026-06-12T11:00:01.000Z",
+    durationMs: 1000,
+    exitCode: 0,
+    output: "Done.",
+    stderr: "",
+    cwd: "/repo",
+    tools: ["read"],
+    ...overrides,
+  };
+}
+
 afterEach(() => {
+  if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+  else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+async function waitFor(assertion: () => void | Promise<void>) {
+  const startedAt = Date.now();
+  let lastError: unknown;
+  while (Date.now() - startedAt < 1000) {
+    try {
+      await assertion();
+      return;
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+  throw lastError;
+}
+
+function registerCoworkForTest(agentDir: string) {
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  let handler: ((args: string, ctx: { cwd: string; ui: { notify: (message: string, level?: string) => void } }) => Promise<void>) | undefined;
+  const messages: Array<{ message: string; level?: string }> = [];
+  const sentMessages: unknown[] = [];
+
+  registerCoworkCommand({
+    registerCommand: (_name: string, options: { handler: typeof handler }) => {
+      handler = options.handler;
+    },
+    sendMessage: (message: unknown) => {
+      sentMessages.push(message);
+    },
+  } as never);
+
+  return {
+    messages,
+    sentMessages,
+    async run(args: string, cwd = agentDir) {
+      if (!handler) throw new Error("cowork command was not registered");
+      await handler(args, {
+        cwd,
+        ui: {
+          notify: (message, level) => messages.push({ message, ...(level ? { level } : {}) }),
+        },
+      });
+      return messages.at(-1)?.message ?? "";
+    },
+  };
+}
 
 test("parseIntervalMs accepts supported intervals", () => {
   expect(parseIntervalMs("30s")).toBe(30_000);
@@ -79,6 +171,251 @@ test("store roundtrips jobs and state", async () => {
   expect(await loadState(paths)).toEqual(state);
 });
 
+test("runner passes expected pi json-mode arguments", async () => {
+  const child = new FakeCoworkProcess();
+  const calls: Array<{ command: string; args: string[]; cwd: string }> = [];
+  const promise = runCoworkJob(
+    makeJob({ cwd: "/repo", model: "sonnet:high", tools: ["read", "grep"], prompt: "Say OK" }),
+    { spawnProcess: makeFakeSpawn(child, calls) },
+  );
+
+  child.close(0);
+  await promise;
+
+  expect(calls[0]?.cwd).toBe("/repo");
+  expect(calls[0]?.args).toEqual(expect.arrayContaining(["--mode", "json", "-p", "--no-session", "--tools", "read,grep", "--model", "sonnet:high", "Say OK"]));
+});
+
+test("runner extracts assistant message_end output", async () => {
+  const child = new FakeCoworkProcess();
+  const promise = runCoworkJob(makeJob(), { spawnProcess: makeFakeSpawn(child) });
+
+  child.stdout.write(`${JSON.stringify({
+    type: "message_end",
+    message: { role: "assistant", content: [{ type: "text", text: "OK" }], stopReason: "stop" },
+  })}\n`);
+  child.close(0);
+
+  await expect(promise).resolves.toMatchObject({ exitCode: 0, output: "OK" });
+});
+
+test("runner converts assistant error stopReason to failed result", async () => {
+  const child = new FakeCoworkProcess();
+  const promise = runCoworkJob(makeJob(), { spawnProcess: makeFakeSpawn(child) });
+
+  child.stdout.write(`${JSON.stringify({
+    type: "message_end",
+    message: {
+      role: "assistant",
+      content: [{ type: "text", text: "Partial" }],
+      stopReason: "error",
+      errorMessage: "Provider failed",
+    },
+  })}\n`);
+  child.close(0);
+
+  const result = await promise;
+  expect(result.exitCode).toBe(1);
+  expect(result.output).toBe("Partial");
+  expect(result.stderr).toContain("Provider failed");
+});
+
+test("runner captures stderr and truncates large output", async () => {
+  const child = new FakeCoworkProcess();
+  const promise = runCoworkJob(makeJob(), { spawnProcess: makeFakeSpawn(child) });
+
+  child.stdout.write(`${JSON.stringify({
+    type: "message_end",
+    message: { role: "assistant", content: [{ type: "text", text: "x".repeat(21_000) }], stopReason: "stop" },
+  })}\n`);
+  child.stderr.write("warning");
+  child.close(0);
+
+  const result = await promise;
+  expect(result.stderr).toContain("warning");
+  expect(result.output.length).toBeLessThan(21_000);
+  expect(result.output).toContain("[truncated");
+});
+
+test("runner records spawn errors as failed results", async () => {
+  const child = new FakeCoworkProcess();
+  const promise = runCoworkJob(makeJob(), { spawnProcess: makeFakeSpawn(child) });
+
+  child.emit("error", new Error("spawn failed"));
+
+  await expect(promise).resolves.toMatchObject({ exitCode: 1, stderr: "spawn failed" });
+});
+
+test("runner times out and kills the process", async () => {
+  const child = new FakeCoworkProcess();
+  child.on("killed", () => child.close(0));
+
+  const result = await runCoworkJob(
+    makeJob({ timeoutMs: 1 }),
+    { spawnProcess: makeFakeSpawn(child) },
+  );
+
+  expect(child.killedWith).toContain("SIGTERM");
+  expect(result.exitCode).toBe(130);
+  expect(result.stderr).toContain("timed out");
+});
+
+test("scheduler runs due jobs with injected runner", async () => {
+  const paths = getCoworkStorePaths(makeTempDir());
+  await saveJobs([makeJob({ createdAt: "2000-01-01T00:00:00.000Z" })], paths);
+
+  const scheduler = new CoworkScheduler(paths, {
+    tickMs: 10,
+    runJob: async (job) => makeRunResult({ jobId: job.id, finishedAt: "2026-06-12T11:00:01.000Z" }),
+  });
+
+  await scheduler.tick();
+  await waitFor(async () => {
+    const state = await loadState(paths);
+    expect(state.jobs["daily-review"]?.lastExitCode).toBe(0);
+    expect(state.jobs["daily-review"]?.consecutiveFailures).toBe(0);
+    expect(state.jobs["daily-review"]?.lastRunAt).toBe("2026-06-12T11:00:01.000Z");
+    expect(state.jobs["daily-review"]?.nextRunAt).toBe("2026-06-12T12:00:01.000Z");
+  });
+});
+
+test("scheduler skips disabled jobs", async () => {
+  const paths = getCoworkStorePaths(makeTempDir());
+  let calls = 0;
+  await saveJobs([makeJob({ enabled: false, createdAt: "2000-01-01T00:00:00.000Z" })], paths);
+
+  const scheduler = new CoworkScheduler(paths, {
+    tickMs: 10,
+    runJob: async (job) => {
+      calls += 1;
+      return makeRunResult({ jobId: job.id });
+    },
+  });
+
+  await scheduler.tick();
+  expect(calls).toBe(0);
+  expect((await loadState(paths)).jobs["daily-review"]?.lastRunAt).toBeUndefined();
+});
+
+test("scheduler applies retryAfter for failed runs", async () => {
+  const paths = getCoworkStorePaths(makeTempDir());
+  await saveJobs([makeJob({ retryAfter: "10m" })], paths);
+
+  const scheduler = new CoworkScheduler(paths, {
+    tickMs: 10,
+    runJob: async (job) => makeRunResult({ jobId: job.id, exitCode: 1, stderr: "Boom", finishedAt: "2026-06-12T11:00:00.000Z" }),
+  });
+
+  await scheduler.runNow("daily-review");
+  const state = await loadState(paths);
+  expect(state.jobs["daily-review"]?.nextRunAt).toBe("2026-06-12T11:10:00.000Z");
+});
+
+test("scheduler disables jobs after maxFailures", async () => {
+  const paths = getCoworkStorePaths(makeTempDir());
+  await saveJobs([makeJob({ maxFailures: 2 })], paths);
+  await saveState({ jobs: { "daily-review": { consecutiveFailures: 1 } } }, paths);
+
+  const scheduler = new CoworkScheduler(paths, {
+    tickMs: 10,
+    runJob: async (job) => makeRunResult({ jobId: job.id, exitCode: 1, stderr: "Boom" }),
+  });
+
+  await scheduler.runNow("daily-review");
+  const state = await loadState(paths);
+  expect(state.jobs["daily-review"]?.consecutiveFailures).toBe(2);
+  expect(state.jobs["daily-review"]?.lastError).toContain("Disabled after 2 consecutive failures");
+  expect((await loadJobs(paths))[0]?.enabled).toBe(false);
+});
+
+test("scheduler records failed injected runs", async () => {
+  const paths = getCoworkStorePaths(makeTempDir());
+  await saveJobs([makeJob()], paths);
+
+  const scheduler = new CoworkScheduler(paths, {
+    tickMs: 10,
+    runJob: async (job) => makeRunResult({ jobId: job.id, exitCode: 1, stderr: "Boom" }),
+  });
+
+  await scheduler.runNow("daily-review");
+  const state = await loadState(paths);
+  expect(state.jobs["daily-review"]?.lastExitCode).toBe(1);
+  expect(state.jobs["daily-review"]?.lastError).toBe("Boom");
+  expect(state.jobs["daily-review"]?.consecutiveFailures).toBe(1);
+});
+
+test("scheduler ignores notification callback failures", async () => {
+  const paths = getCoworkStorePaths(makeTempDir());
+  await saveJobs([makeJob()], paths);
+
+  const scheduler = new CoworkScheduler(paths, {
+    tickMs: 10,
+    runJob: async (job) => makeRunResult({ jobId: job.id, exitCode: 0 }),
+    onRunComplete: () => {
+      throw new Error("notification failed");
+    },
+  });
+
+  await scheduler.runNow("daily-review");
+  const state = await loadState(paths);
+  expect(state.jobs["daily-review"]?.lastExitCode).toBe(0);
+  expect(state.jobs["daily-review"]?.lastError).toBeUndefined();
+});
+
+test("scheduler notifies on completed runs", async () => {
+  const paths = getCoworkStorePaths(makeTempDir());
+  const notifications: string[] = [];
+  await saveJobs([makeJob({ notify: "failures" })], paths);
+
+  const scheduler = new CoworkScheduler(paths, {
+    tickMs: 10,
+    runJob: async (job) => makeRunResult({ jobId: job.id, exitCode: 1, stderr: "Boom" }),
+    onRunComplete: (job, result) => {
+      notifications.push(`${job.id}:${result.exitCode}`);
+    },
+  });
+
+  await scheduler.runNow("daily-review");
+  expect(notifications).toEqual(["daily-review:1"]);
+});
+
+test("scheduler preserves state for concurrent different jobs", async () => {
+  const paths = getCoworkStorePaths(makeTempDir());
+  await saveJobs([makeJob({ id: "a" }), makeJob({ id: "b" })], paths);
+
+  const scheduler = new CoworkScheduler(paths, {
+    tickMs: 10,
+    runJob: async (job) => {
+      await new Promise((resolve) => setTimeout(resolve, job.id === "a" ? 20 : 1));
+      return makeRunResult({ jobId: job.id, finishedAt: job.id === "a" ? "2026-06-12T11:00:01.000Z" : "2026-06-12T11:00:02.000Z" });
+    },
+  });
+
+  await Promise.all([scheduler.runNow("a"), scheduler.runNow("b")]);
+  const state = await loadState(paths);
+  expect(state.jobs.a?.lastRunAt).toBe("2026-06-12T11:00:01.000Z");
+  expect(state.jobs.b?.lastRunAt).toBe("2026-06-12T11:00:02.000Z");
+});
+
+test("scheduler prevents concurrent runs for the same job", async () => {
+  const paths = getCoworkStorePaths(makeTempDir());
+  let resolveRun: ((value: CoworkRunResult) => void) | undefined;
+  await saveJobs([makeJob()], paths);
+
+  const scheduler = new CoworkScheduler(paths, {
+    tickMs: 10,
+    runJob: (job) => new Promise<CoworkRunResult>((resolve) => {
+      resolveRun = () => resolve(makeRunResult({ jobId: job.id }));
+    }),
+  });
+
+  const firstRun = scheduler.runNow("daily-review");
+  await waitFor(() => expect(scheduler.getRunningJobIds()).toEqual(["daily-review"]));
+  await expect(scheduler.runNow("daily-review")).rejects.toThrow(/already running/);
+  resolveRun?.(makeRunResult());
+  await firstRun;
+});
+
 test("scheduler records invalid jobs without throwing", async () => {
   const paths = getCoworkStorePaths(makeTempDir());
   await saveJobs([makeJob({ every: "bad" })], paths);
@@ -89,6 +426,207 @@ test("scheduler records invalid jobs without throwing", async () => {
   const state = await loadState(paths);
   expect(state.jobs["daily-review"]?.lastExitCode).toBe(1);
   expect(state.jobs["daily-review"]?.lastError).toMatch(/Invalid interval/);
+});
+
+test("cowork command adds, shows, and edits jobs", async () => {
+  const agentDir = makeTempDir();
+  const command = registerCoworkForTest(agentDir);
+
+  await command.run('add review every=1h cwd=. model=sonnet:high tools=read,grep retryAfter=10m maxFailures=3 notify=failures prompt="Review local changes" runOnStart=true');
+  let jobs = await loadJobs(getCoworkStorePaths(path.join(agentDir, "cowork")));
+  expect(jobs[0]).toMatchObject({
+    id: "review",
+    every: "1h",
+    model: "sonnet:high",
+    tools: ["read", "grep"],
+    prompt: "Review local changes",
+    retryAfter: "10m",
+    maxFailures: 3,
+    notify: "failures",
+    runOnStart: true,
+  });
+
+  const showBefore = await command.run("show review");
+  expect(showBefore).toContain("Model: sonnet:high");
+  expect(showBefore).toContain("Retry after: 10m");
+  expect(showBefore).toContain("Max failures: 3");
+  expect(showBefore).toContain("Notify: failures");
+  expect(showBefore).toContain("Prompt:\nReview local changes");
+
+  await command.run('edit review every=2h model=default tools=read,find retryAfter=none maxFailures=unlimited notify=always prompt="New prompt" enabled=false');
+  jobs = await loadJobs(getCoworkStorePaths(path.join(agentDir, "cowork")));
+  expect(jobs[0]).toMatchObject({ every: "2h", tools: ["read", "find"], prompt: "New prompt", enabled: false });
+  expect(jobs[0]?.model).toBeUndefined();
+  expect(jobs[0]?.retryAfter).toBeUndefined();
+  expect(jobs[0]?.maxFailures).toBeUndefined();
+  expect(jobs[0]?.notify).toBe("always");
+});
+
+test("cowork command rejects empty tools on add", async () => {
+  const agentDir = makeTempDir();
+  const command = registerCoworkForTest(agentDir);
+
+  await command.run('add review every=1h tools= prompt="Review"');
+
+  expect(command.messages.at(-1)).toMatchObject({ level: "error", message: "tools must contain at least one tool." });
+  expect(await loadJobs(getCoworkStorePaths(path.join(agentDir, "cowork")))).toEqual([]);
+});
+
+test("cowork command validates jobs and reports failures", async () => {
+  const agentDir = makeTempDir();
+  const paths = getCoworkStorePaths(path.join(agentDir, "cowork"));
+  const command = registerCoworkForTest(agentDir);
+
+  await saveJobs(
+    [
+      makeJob({ id: "valid", cwd: agentDir, tools: ["read"], retryAfter: "10m", maxFailures: 3 }),
+      makeJob({ id: "broken", cwd: path.join(agentDir, "missing"), every: "bad", retryAfter: "bad", maxFailures: 0, notify: "sometimes" as never, prompt: "", tools: [] }),
+    ],
+    paths,
+  );
+  await saveState(
+    {
+      jobs: {
+        broken: {
+          consecutiveFailures: 2,
+          lastExitCode: 1,
+          lastError: "Boom",
+          lastRunAt: "2026-06-12T10:00:00.000Z",
+        },
+      },
+    },
+    paths,
+  );
+
+  const validation = await command.run("validate");
+  expect(validation).toContain("✓ valid: valid");
+  expect(validation).toContain("✗ broken");
+  expect(validation).toContain("Invalid interval");
+  expect(validation).toContain("maxFailures must be a positive integer");
+  expect(validation).toContain("notify must be one of");
+  expect(validation).toContain("cwd does not exist");
+
+  const failures = await command.run("failures");
+  expect(failures).toContain("broken: failures=2");
+  expect(failures).toContain("error=Boom");
+});
+
+test("cowork status includes failure and next-due details", async () => {
+  const agentDir = makeTempDir();
+  const paths = getCoworkStorePaths(path.join(agentDir, "cowork"));
+  const command = registerCoworkForTest(agentDir);
+
+  await saveJobs([makeJob({ id: "review", cwd: agentDir })], paths);
+  await saveState(
+    {
+      jobs: {
+        review: {
+          consecutiveFailures: 1,
+          lastError: "Failed",
+          nextRunAt: "2026-06-12T11:00:00.000Z",
+        },
+      },
+    },
+    paths,
+  );
+
+  const status = await command.run("status");
+  expect(status).toContain("Jobs: 1 (1 enabled, 0 disabled)");
+  expect(status).toContain("Failures: review(1)");
+  expect(status).toContain("Next due: review=2026-06-12T11:00:00.000Z");
+});
+
+test("cleanup counts only existing files", async () => {
+  const paths = getCoworkStorePaths(makeTempDir());
+  const files = await saveRunResult(makeRunResult({ startedAt: "2026-06-12T09:00:00.000Z" }), paths);
+  fs.rmSync(files.summaryFile);
+
+  const result = await cleanupRunResults("daily-review", { keep: 0 }, paths);
+  expect(result.deletedRuns).toBe(1);
+  expect(result.deletedFiles).toBe(1);
+});
+
+test("cowork command cleans up old runs", async () => {
+  const agentDir = makeTempDir();
+  const paths = getCoworkStorePaths(path.join(agentDir, "cowork"));
+  const command = registerCoworkForTest(agentDir);
+
+  await saveJobs([makeJob({ id: "review" })], paths);
+  for (const startedAt of [
+    "2026-06-12T09:00:00.000Z",
+    "2026-06-12T10:00:00.000Z",
+    "2026-06-12T11:00:00.000Z",
+  ]) {
+    await saveRunResult(
+      {
+        jobId: "review",
+        startedAt,
+        finishedAt: startedAt,
+        durationMs: 1,
+        exitCode: 0,
+        output: startedAt,
+        stderr: "",
+        cwd: "/repo",
+        tools: ["read"],
+      },
+      paths,
+    );
+  }
+
+  const dryRun = await command.run("cleanup review keep=1 dryRun=true");
+  expect(dryRun).toContain("Would delete 2 run(s)");
+  expect(await listRunResults("review", paths)).toHaveLength(3);
+
+  const cleanup = await command.run("cleanup review keep=1");
+  expect(cleanup).toContain("Deleted 2 run(s)");
+  const remaining = await listRunResults("review", paths);
+  expect(remaining).toHaveLength(1);
+  expect(remaining[0]?.startedAt).toBe("2026-06-12T11:00:00.000Z");
+});
+
+test("cowork command lists runs and latest run", async () => {
+  const agentDir = makeTempDir();
+  const paths = getCoworkStorePaths(path.join(agentDir, "cowork"));
+  const command = registerCoworkForTest(agentDir);
+
+  await saveJobs([makeJob({ id: "review" })], paths);
+  await saveRunResult(
+    {
+      jobId: "review",
+      startedAt: "2026-06-12T10:00:00.000Z",
+      finishedAt: "2026-06-12T10:00:01.000Z",
+      durationMs: 1000,
+      exitCode: 0,
+      output: "First.",
+      stderr: "",
+      cwd: "/repo",
+      tools: ["read"],
+    },
+    paths,
+  );
+  await saveRunResult(
+    {
+      jobId: "review",
+      startedAt: "2026-06-12T11:00:00.000Z",
+      finishedAt: "2026-06-12T11:00:02.000Z",
+      durationMs: 2000,
+      exitCode: 1,
+      output: "Second.",
+      stderr: "Failed.",
+      cwd: "/repo",
+      model: "sonnet:high",
+      tools: ["read"],
+    },
+    paths,
+  );
+
+  const runs = await command.run("runs review");
+  expect(runs.split("\n")[0]).toContain("2026-06-12T11:00:00.000Z");
+  expect(runs).toContain("exit=1");
+
+  const last = await command.run("last review");
+  expect(last).toContain("Second.");
+  expect(last).toContain("Failed.");
 });
 
 test("saveRunResult writes json and markdown summary", async () => {

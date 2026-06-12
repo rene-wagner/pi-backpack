@@ -1,7 +1,12 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { CoworkJob, CoworkRunResult, CoworkState, CoworkStorePaths } from "./types.js";
+import type {
+  CoworkJob,
+  CoworkRunResult,
+  CoworkState,
+  CoworkStorePaths,
+} from "./types.js";
 
 function agentDir() {
   return process.env.PI_CODING_AGENT_DIR ?? path.join(os.homedir(), ".pi", "agent");
@@ -30,6 +35,22 @@ async function writeJson(file: string, value: unknown) {
   await fs.promises.writeFile(file, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
+let stateWriteLock: Promise<void> = Promise.resolve();
+
+async function withStateWriteLock<T>(operation: () => Promise<T>): Promise<T> {
+  const previous = stateWriteLock;
+  let release!: () => void;
+  stateWriteLock = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await previous;
+  try {
+    return await operation();
+  } finally {
+    release();
+  }
+}
+
 export async function loadJobs(paths = getCoworkStorePaths()): Promise<CoworkJob[]> {
   return readJson<CoworkJob[]>(paths.jobsFile, []);
 }
@@ -43,18 +64,34 @@ export async function loadState(paths = getCoworkStorePaths()): Promise<CoworkSt
 }
 
 export async function saveState(state: CoworkState, paths = getCoworkStorePaths()) {
-  await writeJson(paths.stateFile, state);
+  await withStateWriteLock(() => writeJson(paths.stateFile, state));
+}
+
+export async function saveJobState(
+  jobId: string,
+  jobState: CoworkState["jobs"][string],
+  paths = getCoworkStorePaths(),
+) {
+  await withStateWriteLock(async () => {
+    const state = await readJson<CoworkState>(paths.stateFile, { jobs: {} });
+    state.jobs[jobId] = { ...jobState };
+    await writeJson(paths.stateFile, state);
+  });
 }
 
 function safeFilePart(value: string) {
   return value.replace(/[^a-zA-Z0-9._-]/g, "_");
 }
 
+function runDirForJob(jobId: string, paths: CoworkStorePaths) {
+  return path.join(paths.runsDir, safeFilePart(jobId));
+}
+
 export async function saveRunResult(
   result: CoworkRunResult,
   paths = getCoworkStorePaths(),
 ): Promise<{ jsonFile: string; summaryFile: string }> {
-  const runDir = path.join(paths.runsDir, safeFilePart(result.jobId));
+  const runDir = runDirForJob(result.jobId, paths);
   await fs.promises.mkdir(runDir, { recursive: true });
   const stamp = safeFilePart(result.startedAt);
   const jsonFile = path.join(runDir, `${stamp}.json`);
@@ -65,7 +102,108 @@ export async function saveRunResult(
   return { jsonFile, summaryFile };
 }
 
-function formatRunSummary(result: CoworkRunResult) {
+async function listRunFiles(jobId: string, paths: CoworkStorePaths) {
+  const runDir = runDirForJob(jobId, paths);
+  let entries: string[];
+  try {
+    entries = await fs.promises.readdir(runDir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+
+  const runs = await Promise.all(
+    entries
+      .filter((entry) => entry.endsWith(".json"))
+      .map(async (entry) => {
+        const jsonFile = path.join(runDir, entry);
+        const result = await readJson<CoworkRunResult>(jsonFile, undefined as never);
+        const baseName = entry.slice(0, -".json".length);
+        return {
+          result,
+          jsonFile,
+          summaryFile: path.join(runDir, `${baseName}.summary.md`),
+        };
+      }),
+  );
+
+  return runs.sort((a, b) => Date.parse(b.result.startedAt) - Date.parse(a.result.startedAt));
+}
+
+export async function listRunResults(
+  jobId: string,
+  paths = getCoworkStorePaths(),
+): Promise<CoworkRunResult[]> {
+  return (await listRunFiles(jobId, paths)).map((run) => run.result);
+}
+
+export async function loadLatestRunResult(
+  jobId: string,
+  paths = getCoworkStorePaths(),
+): Promise<CoworkRunResult | undefined> {
+  return (await listRunResults(jobId, paths))[0];
+}
+
+export interface CleanupRunResultsOptions {
+  keep?: number;
+  olderThanMs?: number;
+  now?: Date;
+  dryRun?: boolean;
+}
+
+export interface CleanupRunResultsResult {
+  jobId: string;
+  keptRuns: number;
+  deletedRuns: number;
+  deletedFiles: number;
+  dryRun: boolean;
+}
+
+export async function cleanupRunResults(
+  jobId: string,
+  options: CleanupRunResultsOptions,
+  paths = getCoworkStorePaths(),
+): Promise<CleanupRunResultsResult> {
+  const runs = await listRunFiles(jobId, paths);
+  const cutoff = options.olderThanMs === undefined
+    ? undefined
+    : (options.now ?? new Date()).getTime() - options.olderThanMs;
+  const keep = options.keep ?? Number.POSITIVE_INFINITY;
+  const dryRun = options.dryRun === true;
+
+  const candidates = runs.filter((run, index) => {
+    const beyondKeep = index >= keep;
+    const olderThanCutoff = cutoff !== undefined && Date.parse(run.result.startedAt) < cutoff;
+    return beyondKeep || olderThanCutoff;
+  });
+
+  let deletedFiles = 0;
+  if (!dryRun) {
+    for (const run of candidates) {
+      for (const file of [run.jsonFile, run.summaryFile]) {
+        try {
+          await fs.promises.access(file);
+          await fs.promises.rm(file, { force: true });
+          deletedFiles += 1;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
+      }
+    }
+  } else {
+    deletedFiles = candidates.length * 2;
+  }
+
+  return {
+    jobId,
+    keptRuns: runs.length - candidates.length,
+    deletedRuns: candidates.length,
+    deletedFiles,
+    dryRun,
+  };
+}
+
+export function formatRunSummary(result: CoworkRunResult) {
   return `# Cowork Run: ${result.jobId}\n\n` +
     `- Started: ${result.startedAt}\n` +
     `- Finished: ${result.finishedAt}\n` +

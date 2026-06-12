@@ -3,6 +3,20 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { DEFAULT_COWORK_TIMEOUT_MS, DEFAULT_COWORK_TOOLS, type CoworkJob, type CoworkRunOptions, type CoworkRunResult } from "./types.js";
 
+interface SpawnedCoworkProcess {
+  stdout: NodeJS.ReadableStream;
+  stderr: NodeJS.ReadableStream;
+  kill(signal?: NodeJS.Signals | number): boolean;
+  on(event: "close", listener: (code: number | null) => void): this;
+  on(event: "error", listener: (error: Error) => void): this;
+}
+
+export type SpawnCoworkProcess = (
+  command: string,
+  args: string[],
+  options: { cwd: string; stdio: ["ignore", "pipe", "pipe"] },
+) => SpawnedCoworkProcess;
+
 const MAX_OUTPUT_CHARS = 20_000;
 const MAX_STDERR_CHARS = 8_000;
 const MAX_BUFFER_CHARS = 65_536;
@@ -70,7 +84,10 @@ function asAssistantMessage(message: unknown): { content: unknown[]; stopReason?
   return { content: message.content, ...(stopReason ? { stopReason } : {}), ...(errorMessage ? { errorMessage } : {}) };
 }
 
-export async function runCoworkJob(job: CoworkJob, options: CoworkRunOptions = {}): Promise<CoworkRunResult> {
+export async function runCoworkJob(
+  job: CoworkJob,
+  options: CoworkRunOptions & { spawnProcess?: SpawnCoworkProcess } = {},
+): Promise<CoworkRunResult> {
   const startedAt = new Date().toISOString();
   const started = Date.now();
   const tools = job.tools?.length ? job.tools : DEFAULT_COWORK_TOOLS;
@@ -81,7 +98,8 @@ export async function runCoworkJob(job: CoworkJob, options: CoworkRunOptions = {
   const invocation = getPiInvocation(args);
 
   return new Promise((resolve) => {
-    const child = spawn(invocation.command, invocation.args, {
+    const spawnProcess: SpawnCoworkProcess = options.spawnProcess ?? ((command, args, spawnOptions) => spawn(command, args, spawnOptions));
+    const child = spawnProcess(invocation.command, invocation.args, {
       cwd: job.cwd,
       stdio: ["ignore", "pipe", "pipe"],
     });
