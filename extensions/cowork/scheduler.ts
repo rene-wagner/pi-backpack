@@ -1,5 +1,5 @@
 import type { CoworkJob, CoworkJobState, CoworkSchedulerOptions, CoworkState, CoworkStorePaths } from "./types.js";
-import { loadJobs, loadState, saveJobs, saveRunResult, saveState } from "./store.js";
+import { loadJobs, loadState, saveJobs, saveJobState, saveRunResult } from "./store.js";
 import { runCoworkJob } from "./runner.js";
 
 const DEFAULT_TICK_MS = 30_000;
@@ -68,7 +68,6 @@ export class CoworkScheduler {
   async tick() {
     const jobs = await loadJobs(this.paths);
     const state = await loadState(this.paths);
-    let changed = false;
 
     for (const job of jobs) {
       try {
@@ -77,7 +76,7 @@ export class CoworkScheduler {
         const hasRetryNextRun = Boolean(job.retryAfter && jobState.consecutiveFailures > 0 && jobState.nextRunAt);
         if (!hasRetryNextRun && jobState.nextRunAt !== nextRunAt && !jobState.running) {
           jobState.nextRunAt = nextRunAt;
-          changed = true;
+          await saveJobState(job.id, jobState, this.paths);
         }
 
         if (!isJobDue(job, jobState)) continue;
@@ -86,19 +85,16 @@ export class CoworkScheduler {
           continue;
         }
 
-        changed = true;
         void this.runJob(job, state).catch((error: unknown) => this.logError(`Cowork job ${job.id} failed`, error));
       } catch (error) {
-        changed = true;
         const jobState = ensureJobState(state, job.id);
         jobState.lastExitCode = 1;
         jobState.lastError = error instanceof Error ? error.message : String(error);
         jobState.consecutiveFailures += 1;
+        await saveJobState(job.id, jobState, this.paths);
         this.logError(`Skipping invalid cowork job ${job.id}`, error);
       }
     }
-
-    if (changed) await saveState(state, this.paths);
   }
 
   async runNow(jobId: string) {
@@ -118,7 +114,7 @@ export class CoworkScheduler {
     const jobState = ensureJobState(state, job.id);
     jobState.running = true;
     jobState.runningStartedAt = new Date().toISOString();
-    await saveState(state, this.paths);
+    await saveJobState(job.id, jobState, this.paths);
     this.options.onLog?.(`Running cowork job ${job.id}...`);
 
     try {
@@ -151,7 +147,7 @@ export class CoworkScheduler {
       jobState.running = false;
       delete jobState.runningStartedAt;
       this.runningJobs.delete(job.id);
-      await saveState(state, this.paths);
+      await saveJobState(job.id, jobState, this.paths);
     }
   }
 

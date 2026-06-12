@@ -379,6 +379,24 @@ test("scheduler notifies on completed runs", async () => {
   expect(notifications).toEqual(["daily-review:1"]);
 });
 
+test("scheduler preserves state for concurrent different jobs", async () => {
+  const paths = getCoworkStorePaths(makeTempDir());
+  await saveJobs([makeJob({ id: "a" }), makeJob({ id: "b" })], paths);
+
+  const scheduler = new CoworkScheduler(paths, {
+    tickMs: 10,
+    runJob: async (job) => {
+      await new Promise((resolve) => setTimeout(resolve, job.id === "a" ? 20 : 1));
+      return makeRunResult({ jobId: job.id, finishedAt: job.id === "a" ? "2026-06-12T11:00:01.000Z" : "2026-06-12T11:00:02.000Z" });
+    },
+  });
+
+  await Promise.all([scheduler.runNow("a"), scheduler.runNow("b")]);
+  const state = await loadState(paths);
+  expect(state.jobs.a?.lastRunAt).toBe("2026-06-12T11:00:01.000Z");
+  expect(state.jobs.b?.lastRunAt).toBe("2026-06-12T11:00:02.000Z");
+});
+
 test("scheduler prevents concurrent runs for the same job", async () => {
   const paths = getCoworkStorePaths(makeTempDir());
   let resolveRun: ((value: CoworkRunResult) => void) | undefined;

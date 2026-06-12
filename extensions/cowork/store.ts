@@ -35,6 +35,22 @@ async function writeJson(file: string, value: unknown) {
   await fs.promises.writeFile(file, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
+let stateWriteLock: Promise<void> = Promise.resolve();
+
+async function withStateWriteLock<T>(operation: () => Promise<T>): Promise<T> {
+  const previous = stateWriteLock;
+  let release!: () => void;
+  stateWriteLock = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await previous;
+  try {
+    return await operation();
+  } finally {
+    release();
+  }
+}
+
 export async function loadJobs(paths = getCoworkStorePaths()): Promise<CoworkJob[]> {
   return readJson<CoworkJob[]>(paths.jobsFile, []);
 }
@@ -48,7 +64,19 @@ export async function loadState(paths = getCoworkStorePaths()): Promise<CoworkSt
 }
 
 export async function saveState(state: CoworkState, paths = getCoworkStorePaths()) {
-  await writeJson(paths.stateFile, state);
+  await withStateWriteLock(() => writeJson(paths.stateFile, state));
+}
+
+export async function saveJobState(
+  jobId: string,
+  jobState: CoworkState["jobs"][string],
+  paths = getCoworkStorePaths(),
+) {
+  await withStateWriteLock(async () => {
+    const state = await readJson<CoworkState>(paths.stateFile, { jobs: {} });
+    state.jobs[jobId] = { ...jobState };
+    await writeJson(paths.stateFile, state);
+  });
 }
 
 function safeFilePart(value: string) {
