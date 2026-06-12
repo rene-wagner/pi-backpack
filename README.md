@@ -8,6 +8,7 @@ A Pi package that provides reusable Pi skills and extensions.
 - `skills/git-worktrees/SKILL.md` — guides safe Git worktree creation, inspection, syncing, cleanup, and troubleshooting.
 - `skills/code-review/SKILL.md` — guides structured code reviews for Gitea pull requests or local changes against `main`.
 - `extensions/subagent/` — registers the `subagent` tool.
+- `extensions/cowork/` — registers the `/cowork` command for recurring Pi agent jobs.
 
 ## Prerequisites
 
@@ -43,6 +44,7 @@ Smoke tests after installation:
 Use subagent orchestration: run one read-only subagent to summarize this repository's README.
 Use git worktrees: list this repository's worktrees and summarize the current status.
 Use code review: review local changes against main.
+/cowork status
 ```
 
 ## Subagent extension
@@ -181,6 +183,26 @@ Chained workflow:
 - **Unknown model**: remove `model` or use a model id configured in your Pi installation.
 - **Missing tools**: pass only tool ids available in the current Pi environment.
 - **No useful output**: make the subagent task self-contained and specify the expected output format.
+
+## Cowork extension
+
+The cowork extension registers `/cowork` to manage recurring Pi agent jobs. Jobs are stored under `~/.pi/agent/cowork/` and run isolated `pi --mode json -p --no-session` processes.
+
+Initial commands:
+
+```text
+/cowork status
+/cowork list
+/cowork add daily-review every=24h cwd=. tools=read,grep,find,bash prompt="Review local changes and summarize risks."
+/cowork run daily-review
+/cowork start
+/cowork stop
+/cowork enable daily-review
+/cowork disable daily-review
+/cowork remove daily-review
+```
+
+The MVP scheduler runs in the foreground while the current Pi session is open. See `cowork-design.md` for the planned headless daemon follow-up.
 
 ## Code review skill
 
