@@ -193,8 +193,12 @@ Initial commands:
 ```text
 /cowork status
 /cowork list
+/cowork show daily-review
 /cowork add daily-review every=24h cwd=. tools=read,grep,find,bash prompt="Review local changes and summarize risks."
+/cowork edit daily-review model=sonnet:high every=1h
 /cowork run daily-review
+/cowork runs daily-review
+/cowork last daily-review
 /cowork start
 /cowork stop
 /cowork enable daily-review

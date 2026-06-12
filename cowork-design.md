@@ -21,7 +21,11 @@ Beispiele:
 ```text
 /cowork add
 /cowork list
+/cowork show daily-review
+/cowork edit daily-review model=sonnet:high every=1h
 /cowork run daily-review
+/cowork runs daily-review
+/cowork last daily-review
 /cowork start
 /cowork stop
 /cowork status
@@ -188,6 +192,10 @@ Zeigt alle Jobs mit Status:
 - nächster Lauf
 - letzter Exit-Code
 
+### `/cowork show <id>`
+
+Zeigt die vollständige Job-Konfiguration, den Prompt und den letzten bekannten Status.
+
 ### `/cowork add`
 
 MVP: zunächst argumentbasiert oder interaktiv minimal.
@@ -199,6 +207,16 @@ Mögliche einfache Syntax:
 ```
 
 Wenn keine Argumente angegeben sind, kann später ein UI-Wizard folgen.
+
+### `/cowork edit <id> key=value...`
+
+Aktualisiert einzelne Job-Felder, z. B.:
+
+```text
+/cowork edit daily-review model=sonnet:high every=1h
+/cowork edit daily-review tools=read,grep,find,bash
+/cowork edit daily-review prompt="New prompt"
+```
 
 ### `/cowork run <id>`
 
@@ -219,6 +237,10 @@ Startet den Foreground-Scheduler in der aktuellen Pi-Session.
 ### `/cowork stop`
 
 Stoppt den Foreground-Scheduler. Bereits laufende Runs werden im MVP nicht hart abgebrochen, außer wir geben explizit ein AbortSignal weiter.
+
+### `/cowork runs <id>` / `/cowork last <id>`
+
+Listet die letzten Runs bzw. zeigt die letzte Run-Summary mit Output und stderr.
 
 ### `/cowork status`
 

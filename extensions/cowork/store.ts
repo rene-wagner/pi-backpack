@@ -1,7 +1,12 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { CoworkJob, CoworkRunResult, CoworkState, CoworkStorePaths } from "./types.js";
+import type {
+  CoworkJob,
+  CoworkRunResult,
+  CoworkState,
+  CoworkStorePaths,
+} from "./types.js";
 
 function agentDir() {
   return process.env.PI_CODING_AGENT_DIR ?? path.join(os.homedir(), ".pi", "agent");
@@ -50,11 +55,15 @@ function safeFilePart(value: string) {
   return value.replace(/[^a-zA-Z0-9._-]/g, "_");
 }
 
+function runDirForJob(jobId: string, paths: CoworkStorePaths) {
+  return path.join(paths.runsDir, safeFilePart(jobId));
+}
+
 export async function saveRunResult(
   result: CoworkRunResult,
   paths = getCoworkStorePaths(),
 ): Promise<{ jsonFile: string; summaryFile: string }> {
-  const runDir = path.join(paths.runsDir, safeFilePart(result.jobId));
+  const runDir = runDirForJob(result.jobId, paths);
   await fs.promises.mkdir(runDir, { recursive: true });
   const stamp = safeFilePart(result.startedAt);
   const jsonFile = path.join(runDir, `${stamp}.json`);
@@ -65,7 +74,36 @@ export async function saveRunResult(
   return { jsonFile, summaryFile };
 }
 
-function formatRunSummary(result: CoworkRunResult) {
+export async function listRunResults(
+  jobId: string,
+  paths = getCoworkStorePaths(),
+): Promise<CoworkRunResult[]> {
+  const runDir = runDirForJob(jobId, paths);
+  let entries: string[];
+  try {
+    entries = await fs.promises.readdir(runDir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+
+  const results = await Promise.all(
+    entries
+      .filter((entry) => entry.endsWith(".json"))
+      .map(async (entry) => readJson<CoworkRunResult>(path.join(runDir, entry), undefined as never)),
+  );
+
+  return results.sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt));
+}
+
+export async function loadLatestRunResult(
+  jobId: string,
+  paths = getCoworkStorePaths(),
+): Promise<CoworkRunResult | undefined> {
+  return (await listRunResults(jobId, paths))[0];
+}
+
+export function formatRunSummary(result: CoworkRunResult) {
   return `# Cowork Run: ${result.jobId}\n\n` +
     `- Started: ${result.startedAt}\n` +
     `- Finished: ${result.finishedAt}\n` +

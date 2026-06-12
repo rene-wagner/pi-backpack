@@ -2,11 +2,13 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, expect, test } from "vitest";
+import { registerCoworkCommand } from "../extensions/cowork/command.js";
 import { CoworkScheduler, computeNextRunAt, isJobDue, parseIntervalMs } from "../extensions/cowork/scheduler.js";
 import { getCoworkStorePaths, loadJobs, loadState, saveJobs, saveRunResult, saveState } from "../extensions/cowork/store.js";
 import type { CoworkJob } from "../extensions/cowork/types.js";
 
 const tempDirs: string[] = [];
+const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
 
 function makeTempDir() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-cowork-test-"));
@@ -28,10 +30,39 @@ function makeJob(overrides: Partial<CoworkJob> = {}): CoworkJob {
 }
 
 afterEach(() => {
+  if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+  else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+function registerCoworkForTest(agentDir: string) {
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  let handler: ((args: string, ctx: { cwd: string; ui: { notify: (message: string, level?: string) => void } }) => Promise<void>) | undefined;
+  const messages: Array<{ message: string; level?: string }> = [];
+
+  registerCoworkCommand({
+    registerCommand: (_name: string, options: { handler: typeof handler }) => {
+      handler = options.handler;
+    },
+  } as never);
+
+  return {
+    messages,
+    async run(args: string, cwd = agentDir) {
+      if (!handler) throw new Error("cowork command was not registered");
+      await handler(args, {
+        cwd,
+        ui: {
+          notify: (message, level) => messages.push({ message, ...(level ? { level } : {}) }),
+        },
+      });
+      return messages.at(-1)?.message ?? "";
+    },
+  };
+}
 
 test("parseIntervalMs accepts supported intervals", () => {
   expect(parseIntervalMs("30s")).toBe(30_000);
@@ -89,6 +120,76 @@ test("scheduler records invalid jobs without throwing", async () => {
   const state = await loadState(paths);
   expect(state.jobs["daily-review"]?.lastExitCode).toBe(1);
   expect(state.jobs["daily-review"]?.lastError).toMatch(/Invalid interval/);
+});
+
+test("cowork command adds, shows, and edits jobs", async () => {
+  const agentDir = makeTempDir();
+  const command = registerCoworkForTest(agentDir);
+
+  await command.run('add review every=1h cwd=. model=sonnet:high tools=read,grep prompt="Review local changes" runOnStart=true');
+  let jobs = await loadJobs(getCoworkStorePaths(path.join(agentDir, "cowork")));
+  expect(jobs[0]).toMatchObject({
+    id: "review",
+    every: "1h",
+    model: "sonnet:high",
+    tools: ["read", "grep"],
+    prompt: "Review local changes",
+    runOnStart: true,
+  });
+
+  const showBefore = await command.run("show review");
+  expect(showBefore).toContain("Model: sonnet:high");
+  expect(showBefore).toContain("Prompt:\nReview local changes");
+
+  await command.run('edit review every=2h model=default tools=read,find prompt="New prompt" enabled=false');
+  jobs = await loadJobs(getCoworkStorePaths(path.join(agentDir, "cowork")));
+  expect(jobs[0]).toMatchObject({ every: "2h", tools: ["read", "find"], prompt: "New prompt", enabled: false });
+  expect(jobs[0]?.model).toBeUndefined();
+});
+
+test("cowork command lists runs and latest run", async () => {
+  const agentDir = makeTempDir();
+  const paths = getCoworkStorePaths(path.join(agentDir, "cowork"));
+  const command = registerCoworkForTest(agentDir);
+
+  await saveJobs([makeJob({ id: "review" })], paths);
+  await saveRunResult(
+    {
+      jobId: "review",
+      startedAt: "2026-06-12T10:00:00.000Z",
+      finishedAt: "2026-06-12T10:00:01.000Z",
+      durationMs: 1000,
+      exitCode: 0,
+      output: "First.",
+      stderr: "",
+      cwd: "/repo",
+      tools: ["read"],
+    },
+    paths,
+  );
+  await saveRunResult(
+    {
+      jobId: "review",
+      startedAt: "2026-06-12T11:00:00.000Z",
+      finishedAt: "2026-06-12T11:00:02.000Z",
+      durationMs: 2000,
+      exitCode: 1,
+      output: "Second.",
+      stderr: "Failed.",
+      cwd: "/repo",
+      model: "sonnet:high",
+      tools: ["read"],
+    },
+    paths,
+  );
+
+  const runs = await command.run("runs review");
+  expect(runs.split("\n")[0]).toContain("2026-06-12T11:00:00.000Z");
+  expect(runs).toContain("exit=1");
+
+  const last = await command.run("last review");
+  expect(last).toContain("Second.");
+  expect(last).toContain("Failed.");
 });
 
 test("saveRunResult writes json and markdown summary", async () => {

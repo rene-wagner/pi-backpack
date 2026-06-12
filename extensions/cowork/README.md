@@ -23,8 +23,12 @@ This is the foreground MVP. The scheduler only runs while the current Pi session
 ```text
 /cowork status
 /cowork list
+/cowork show <id>
 /cowork add <id> every=<interval> prompt="..." [cwd=.] [tools=read,grep,find,ls] [model=...] [runOnStart=true]
+/cowork edit <id> every=<interval> prompt="..." [cwd=.] [tools=read,grep,find,ls] [model=...]
 /cowork run <id>
+/cowork runs <id>
+/cowork last <id>
 /cowork start
 /cowork stop
 /cowork enable <id>
@@ -48,11 +52,31 @@ With a specific model:
 
 The `model` value is passed to Pi as `--model <value>`, so model patterns such as `sonnet:high` can be used if they are valid in your Pi installation.
 
+## Show or edit a job
+
+```text
+/cowork show daily-review
+/cowork edit daily-review model=sonnet:high every=1h
+/cowork edit daily-review tools=read,grep,find,bash
+/cowork edit daily-review prompt="Updated prompt"
+```
+
+Use `model=default`, `model=none`, or an empty `model=` value to remove the explicit model and use Pi's default model.
+
 ## Run a job manually
 
 ```text
 /cowork run readme-summary
 ```
+
+## Inspect runs
+
+```text
+/cowork runs daily-review
+/cowork last daily-review
+```
+
+`/cowork runs` lists recent runs. `/cowork last` shows the latest run summary, including output and stderr.
 
 ## Start the scheduler
 
