@@ -45,6 +45,12 @@ Use subagent orchestration: run one read-only subagent to summarize this reposit
 Use git worktrees: list this repository's worktrees and summarize the current status.
 Use code review: review local changes against main.
 /cowork status
+/cowork add readme-summary every=30s cwd=. tools=read,grep,find,ls prompt="Summarize README.md in one sentence."
+/cowork validate readme-summary
+/cowork run readme-summary
+/cowork last readme-summary
+/cowork cleanup readme-summary keep=1 dryRun=true
+/cowork remove readme-summary
 ```
 
 ## Subagent extension

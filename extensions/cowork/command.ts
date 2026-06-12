@@ -252,7 +252,7 @@ export function registerCoworkCommand(pi: ExtensionAPI) {
       prompt,
       ...(values.has("model") ? { model: values.get("model")! } : {}),
       tools: values.has("tools")
-        ? splitList(values.get("tools")!)
+        ? parseTools(values.get("tools")!)
         : DEFAULT_COWORK_TOOLS,
       timeoutMs,
       ...(retryAfter !== undefined ? { retryAfter } : {}),
@@ -495,9 +495,7 @@ function applyJobValues(job: CoworkJob, values: Map<string, string>, defaultCwd:
   }
   const tools = values.get("tools");
   if (tools !== undefined) {
-    const parsed = splitList(tools);
-    if (parsed.length === 0) throw new Error("tools must contain at least one tool.");
-    job.tools = parsed;
+    job.tools = parseTools(tools);
   }
   const timeoutMs = values.get("timeoutMs");
   if (timeoutMs !== undefined) {
@@ -602,6 +600,12 @@ function parseKeyValues(tokens: string[]) {
     values.set(token.slice(0, index), token.slice(index + 1));
   }
   return values;
+}
+
+function parseTools(value: string) {
+  const tools = splitList(value);
+  if (tools.length === 0) throw new Error("tools must contain at least one tool.");
+  return tools;
 }
 
 function splitList(value: string) {

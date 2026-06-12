@@ -344,6 +344,24 @@ test("scheduler records failed injected runs", async () => {
   expect(state.jobs["daily-review"]?.consecutiveFailures).toBe(1);
 });
 
+test("scheduler ignores notification callback failures", async () => {
+  const paths = getCoworkStorePaths(makeTempDir());
+  await saveJobs([makeJob()], paths);
+
+  const scheduler = new CoworkScheduler(paths, {
+    tickMs: 10,
+    runJob: async (job) => makeRunResult({ jobId: job.id, exitCode: 0 }),
+    onRunComplete: () => {
+      throw new Error("notification failed");
+    },
+  });
+
+  await scheduler.runNow("daily-review");
+  const state = await loadState(paths);
+  expect(state.jobs["daily-review"]?.lastExitCode).toBe(0);
+  expect(state.jobs["daily-review"]?.lastError).toBeUndefined();
+});
+
 test("scheduler notifies on completed runs", async () => {
   const paths = getCoworkStorePaths(makeTempDir());
   const notifications: string[] = [];
@@ -424,6 +442,16 @@ test("cowork command adds, shows, and edits jobs", async () => {
   expect(jobs[0]?.retryAfter).toBeUndefined();
   expect(jobs[0]?.maxFailures).toBeUndefined();
   expect(jobs[0]?.notify).toBe("always");
+});
+
+test("cowork command rejects empty tools on add", async () => {
+  const agentDir = makeTempDir();
+  const command = registerCoworkForTest(agentDir);
+
+  await command.run('add review every=1h tools= prompt="Review"');
+
+  expect(command.messages.at(-1)).toMatchObject({ level: "error", message: "tools must contain at least one tool." });
+  expect(await loadJobs(getCoworkStorePaths(path.join(agentDir, "cowork")))).toEqual([]);
 });
 
 test("cowork command validates jobs and reports failures", async () => {

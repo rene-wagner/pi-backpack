@@ -39,6 +39,26 @@ This is the foreground MVP. The scheduler only runs while the current Pi session
 /cowork remove <id>
 ```
 
+## Quick start
+
+Use a unique job id for smoke tests:
+
+```text
+/cowork add readme-summary every=30s cwd=. tools=read,grep,find,ls notify=always prompt="Summarize README.md in one sentence."
+/cowork validate readme-summary
+/cowork run readme-summary
+/cowork last readme-summary
+/cowork runs readme-summary
+/cowork cleanup readme-summary keep=1 dryRun=true
+/cowork remove readme-summary
+```
+
+For an isolated manual smoke test, start Pi with a temporary agent directory so the job store does not affect your normal setup:
+
+```bash
+PI_CODING_AGENT_DIR="$(mktemp -d)" pi -e .
+```
+
 ## Add a job
 
 Example:

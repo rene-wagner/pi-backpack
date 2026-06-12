@@ -136,7 +136,7 @@ export class CoworkScheduler {
         jobState.consecutiveFailures += 1;
         await applyFailurePolicy(job, jobState, this.paths, result.finishedAt);
       }
-      await this.options.onRunComplete?.(job, result, jobState);
+      await this.notifyRunComplete(job, result, jobState);
       return result;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -145,13 +145,29 @@ export class CoworkScheduler {
       jobState.lastError = message;
       jobState.consecutiveFailures += 1;
       await applyFailurePolicy(job, jobState, this.paths, jobState.lastRunAt);
-      await this.options.onRunError?.(job, error instanceof Error ? error : new Error(message), jobState);
+      await this.notifyRunError(job, error instanceof Error ? error : new Error(message), jobState);
       throw error;
     } finally {
       jobState.running = false;
       delete jobState.runningStartedAt;
       this.runningJobs.delete(job.id);
       await saveState(state, this.paths);
+    }
+  }
+
+  private async notifyRunComplete(job: CoworkJob, result: Awaited<ReturnType<NonNullable<CoworkSchedulerOptions["runJob"]>>>, state: CoworkJobState) {
+    try {
+      await this.options.onRunComplete?.(job, result, state);
+    } catch (error) {
+      this.logError(`Cowork completion callback for ${job.id} failed`, error);
+    }
+  }
+
+  private async notifyRunError(job: CoworkJob, error: Error, state: CoworkJobState) {
+    try {
+      await this.options.onRunError?.(job, error, state);
+    } catch (callbackError) {
+      this.logError(`Cowork error callback for ${job.id} failed`, callbackError);
     }
   }
 
