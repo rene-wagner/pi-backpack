@@ -147,6 +147,68 @@ test("cowork command adds, shows, and edits jobs", async () => {
   expect(jobs[0]?.model).toBeUndefined();
 });
 
+test("cowork command validates jobs and reports failures", async () => {
+  const agentDir = makeTempDir();
+  const paths = getCoworkStorePaths(path.join(agentDir, "cowork"));
+  const command = registerCoworkForTest(agentDir);
+
+  await saveJobs(
+    [
+      makeJob({ id: "valid", cwd: agentDir, tools: ["read"] }),
+      makeJob({ id: "broken", cwd: path.join(agentDir, "missing"), every: "bad", prompt: "", tools: [] }),
+    ],
+    paths,
+  );
+  await saveState(
+    {
+      jobs: {
+        broken: {
+          consecutiveFailures: 2,
+          lastExitCode: 1,
+          lastError: "Boom",
+          lastRunAt: "2026-06-12T10:00:00.000Z",
+        },
+      },
+    },
+    paths,
+  );
+
+  const validation = await command.run("validate");
+  expect(validation).toContain("✓ valid: valid");
+  expect(validation).toContain("✗ broken");
+  expect(validation).toContain("Invalid interval");
+  expect(validation).toContain("cwd does not exist");
+
+  const failures = await command.run("failures");
+  expect(failures).toContain("broken: failures=2");
+  expect(failures).toContain("error=Boom");
+});
+
+test("cowork status includes failure and next-due details", async () => {
+  const agentDir = makeTempDir();
+  const paths = getCoworkStorePaths(path.join(agentDir, "cowork"));
+  const command = registerCoworkForTest(agentDir);
+
+  await saveJobs([makeJob({ id: "review", cwd: agentDir })], paths);
+  await saveState(
+    {
+      jobs: {
+        review: {
+          consecutiveFailures: 1,
+          lastError: "Failed",
+          nextRunAt: "2026-06-12T11:00:00.000Z",
+        },
+      },
+    },
+    paths,
+  );
+
+  const status = await command.run("status");
+  expect(status).toContain("Jobs: 1 (1 enabled, 0 disabled)");
+  expect(status).toContain("Failures: review(1)");
+  expect(status).toContain("Next due: review=2026-06-12T11:00:00.000Z");
+});
+
 test("cowork command lists runs and latest run", async () => {
   const agentDir = makeTempDir();
   const paths = getCoworkStorePaths(path.join(agentDir, "cowork"));

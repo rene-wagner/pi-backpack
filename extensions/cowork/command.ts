@@ -1,6 +1,7 @@
+import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { CoworkScheduler, parseIntervalMs } from "./scheduler.js";
+import { CoworkScheduler, computeNextRunAt, parseIntervalMs } from "./scheduler.js";
 import {
   formatRunSummary,
   getCoworkStorePaths,
@@ -46,6 +47,15 @@ export function registerCoworkCommand(pi: ExtensionAPI) {
           const id = requireId(tokens, "edit");
           await editJob(id, tokens.slice(1), ctx.cwd);
           ctx.ui.notify(`Updated cowork job ${id}`, "info");
+          return;
+        }
+        if (action === "validate") {
+          const id = tokens[0];
+          ctx.ui.notify(await validateJobs(id), "info");
+          return;
+        }
+        if (action === "failures") {
+          ctx.ui.notify(await failuresText(), "info");
           return;
         }
         if (action === "run") {
@@ -152,6 +162,7 @@ export function registerCoworkCommand(pi: ExtensionAPI) {
       `Last run: ${state?.lastRunAt ?? "never"}`,
       `Next run: ${state?.nextRunAt ?? "unknown"}`,
       `Last exit: ${state?.lastExitCode ?? "n/a"}`,
+      `Running: ${state?.running === true ? `yes since ${state.runningStartedAt ?? "unknown"}` : "no"}`,
       `Failures: ${state?.consecutiveFailures ?? 0}`,
       `Last error: ${state?.lastError ?? "none"}`,
       "",
@@ -162,11 +173,29 @@ export function registerCoworkCommand(pi: ExtensionAPI) {
 
   async function statusText() {
     const jobs = await loadJobs(paths);
+    const state = await loadState(paths);
     const runningIds = scheduler?.getRunningJobIds() ?? [];
+    const enabledJobs = jobs.filter((job) => job.enabled);
+    const failedJobs = jobs.filter((job) => (state.jobs[job.id]?.consecutiveFailures ?? 0) > 0);
+    const nextJobs = jobs
+      .filter((job) => job.enabled)
+      .map((job) => {
+        try {
+          const nextRunAt = state.jobs[job.id]?.nextRunAt ?? computeSafeNextRunAt(job, state.jobs[job.id]);
+          return { id: job.id, nextRunAt };
+        } catch {
+          return { id: job.id, nextRunAt: "invalid" };
+        }
+      })
+      .sort((a, b) => Date.parse(a.nextRunAt) - Date.parse(b.nextRunAt))
+      .slice(0, 5);
+
     return [
       `Cowork scheduler: ${scheduler?.isRunning() ? "running" : "stopped"}`,
-      `Jobs: ${jobs.length}`,
+      `Jobs: ${jobs.length} (${enabledJobs.length} enabled, ${jobs.length - enabledJobs.length} disabled)`,
       `Running: ${runningIds.length ? runningIds.join(", ") : "none"}`,
+      `Failures: ${failedJobs.length ? failedJobs.map((job) => `${job.id}(${state.jobs[job.id]?.consecutiveFailures ?? 0})`).join(", ") : "none"}`,
+      `Next due: ${nextJobs.length ? nextJobs.map((job) => `${job.id}=${job.nextRunAt}`).join(", ") : "none"}`,
       `Store: ${paths.rootDir}`,
     ].join("\n");
   }
@@ -251,6 +280,39 @@ export function registerCoworkCommand(pi: ExtensionAPI) {
     await saveJobs(next, paths);
   }
 
+  async function validateJobs(id: string | undefined) {
+    const jobs = await loadJobs(paths);
+    const selected = id ? [findJob(jobs, id)] : jobs;
+    if (selected.length === 0) return "No cowork jobs configured.";
+
+    const lines = await Promise.all(
+      selected.map(async (job) => {
+        const issues = await validateJob(job);
+        if (issues.length === 0) return `✓ ${job.id}: valid`;
+        return [`✗ ${job.id}: ${issues.length} issue(s)`, ...issues.map((issue) => `  - ${issue}`)].join("\n");
+      }),
+    );
+    return lines.join("\n");
+  }
+
+  async function failuresText() {
+    const jobs = await loadJobs(paths);
+    const state = await loadState(paths);
+    const failures = jobs.filter((job) => (state.jobs[job.id]?.consecutiveFailures ?? 0) > 0 || state.jobs[job.id]?.lastError);
+    if (failures.length === 0) return "No cowork job failures recorded.";
+    return failures
+      .map((job) => {
+        const jobState = state.jobs[job.id];
+        return [
+          `${job.id}: failures=${jobState?.consecutiveFailures ?? 0}`,
+          `lastRun=${jobState?.lastRunAt ?? "never"}`,
+          `exit=${jobState?.lastExitCode ?? "n/a"}`,
+          `error=${jobState?.lastError ?? "none"}`,
+        ].join(" | ");
+      })
+      .join("\n");
+  }
+
   async function listRuns(id: string) {
     findJob(await loadJobs(paths), id);
     const runs = await listRunResults(id, paths);
@@ -273,6 +335,37 @@ function findJob(jobs: CoworkJob[], id: string) {
   const job = jobs.find((candidate) => candidate.id === id);
   if (!job) throw new Error(`Unknown cowork job "${id}".`);
   return job;
+}
+
+function computeSafeNextRunAt(job: CoworkJob, state: Parameters<typeof computeNextRunAt>[1]) {
+  return computeNextRunAt(job, state);
+}
+
+async function validateJob(job: CoworkJob) {
+  const issues: string[] = [];
+
+  if (!job.id.trim()) issues.push("id must not be empty");
+  try {
+    parseIntervalMs(job.every);
+  } catch (error) {
+    issues.push(error instanceof Error ? error.message : String(error));
+  }
+  if (!job.prompt.trim()) issues.push("prompt must not be empty");
+  if (!Array.isArray(job.tools) || job.tools.length === 0) issues.push("tools must contain at least one tool");
+  if (job.timeoutMs !== undefined && (!Number.isFinite(job.timeoutMs) || job.timeoutMs <= 0)) {
+    issues.push("timeoutMs must be a positive number");
+  }
+  if ((job.concurrency ?? "skip") !== "skip") issues.push('MVP only supports concurrency="skip"');
+
+  try {
+    const stat = await fs.promises.stat(job.cwd);
+    if (!stat.isDirectory()) issues.push(`cwd is not a directory: ${job.cwd}`);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    issues.push(code === "ENOENT" ? `cwd does not exist: ${job.cwd}` : `cwd is not accessible: ${job.cwd}`);
+  }
+
+  return issues;
 }
 
 function applyJobValues(job: CoworkJob, values: Map<string, string>, defaultCwd: string) {
@@ -391,6 +484,8 @@ function helpText() {
     "/cowork show <id>",
     '/cowork add <id> every=1h prompt="..." [cwd=.] [tools=read,grep,find,ls] [model=...] [runOnStart=true]',
     '/cowork edit <id> every=1h prompt="..." [cwd=.] [tools=read,grep,find,ls] [model=...]',
+    "/cowork validate [id]",
+    "/cowork failures",
     "/cowork run <id>",
     "/cowork runs <id>",
     "/cowork last <id>",

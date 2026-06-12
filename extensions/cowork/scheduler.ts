@@ -116,6 +116,7 @@ export class CoworkScheduler {
     this.runningJobs.add(job.id);
     const jobState = ensureJobState(state, job.id);
     jobState.running = true;
+    jobState.runningStartedAt = new Date().toISOString();
     await saveState(state, this.paths);
     this.options.onLog?.(`Running cowork job ${job.id}...`);
 
@@ -140,6 +141,7 @@ export class CoworkScheduler {
       throw error;
     } finally {
       jobState.running = false;
+      delete jobState.runningStartedAt;
       this.runningJobs.delete(job.id);
       await saveState(state, this.paths);
     }

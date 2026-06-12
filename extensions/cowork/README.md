@@ -26,6 +26,8 @@ This is the foreground MVP. The scheduler only runs while the current Pi session
 /cowork show <id>
 /cowork add <id> every=<interval> prompt="..." [cwd=.] [tools=read,grep,find,ls] [model=...] [runOnStart=true]
 /cowork edit <id> every=<interval> prompt="..." [cwd=.] [tools=read,grep,find,ls] [model=...]
+/cowork validate [id]
+/cowork failures
 /cowork run <id>
 /cowork runs <id>
 /cowork last <id>
@@ -62,6 +64,17 @@ The `model` value is passed to Pi as `--model <value>`, so model patterns such a
 ```
 
 Use `model=default`, `model=none`, or an empty `model=` value to remove the explicit model and use Pi's default model.
+
+## Validate jobs and inspect failures
+
+```text
+/cowork validate
+/cowork validate daily-review
+/cowork failures
+/cowork status
+```
+
+Validation checks interval syntax, cwd accessibility, prompt, tools, timeout, and supported concurrency. Status includes scheduler state, running jobs, failed jobs, and the next due jobs.
 
 ## Run a job manually
 

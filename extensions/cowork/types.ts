@@ -22,6 +22,7 @@ export interface CoworkJobState {
   lastError?: string;
   consecutiveFailures: number;
   running?: boolean;
+  runningStartedAt?: string;
 }
 
 export interface CoworkState {

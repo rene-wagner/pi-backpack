@@ -23,6 +23,8 @@ Beispiele:
 /cowork list
 /cowork show daily-review
 /cowork edit daily-review model=sonnet:high every=1h
+/cowork validate daily-review
+/cowork failures
 /cowork run daily-review
 /cowork runs daily-review
 /cowork last daily-review
@@ -218,6 +220,21 @@ Aktualisiert einzelne Job-Felder, z. B.:
 /cowork edit daily-review prompt="New prompt"
 ```
 
+### `/cowork validate [id]`
+
+Prüft Job-Konfigurationen vor unbeaufsichtigten Läufen:
+
+- gültiges Intervall
+- existierendes und zugängliches `cwd`
+- nicht leerer Prompt
+- mindestens ein Tool
+- valider Timeout
+- unterstützte Concurrency
+
+### `/cowork failures`
+
+Listet Jobs mit letzten Fehlern oder aufeinanderfolgenden Fehlschlägen.
+
 ### `/cowork run <id>`
 
 Startet einen Job sofort, unabhängig vom Intervall.
@@ -244,7 +261,7 @@ Listet die letzten Runs bzw. zeigt die letzte Run-Summary mit Output und stderr.
 
 ### `/cowork status`
 
-Zeigt Scheduler-Status:
+Zeigt Scheduler-Status, laufende Jobs, Fehler-Zusammenfassung und nächste fällige Jobs:
 
 - läuft / läuft nicht
 - Anzahl Jobs
@@ -276,7 +293,7 @@ Da Cowork unbeaufsichtigt laufen kann, gelten defensive Defaults:
 ## MVP Definition of Done
 
 - `extensions/cowork` existiert und ist im Package geladen.
-- `/cowork list`, `/cowork add`, `/cowork run`, `/cowork start`, `/cowork stop`, `/cowork status` funktionieren.
+- `/cowork list`, `/cowork add`, `/cowork show`, `/cowork edit`, `/cowork validate`, `/cowork failures`, `/cowork run`, `/cowork runs`, `/cowork last`, `/cowork start`, `/cowork stop`, `/cowork status` funktionieren.
 - Jobs werden in `~/.pi/agent/cowork/jobs.json` gespeichert.
 - Runs werden als JSON und Markdown-Summary gespeichert.
 - Ein Job mit kurzem Intervall läuft automatisch im Foreground-Scheduler.
