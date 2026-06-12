@@ -74,10 +74,7 @@ export async function saveRunResult(
   return { jsonFile, summaryFile };
 }
 
-export async function listRunResults(
-  jobId: string,
-  paths = getCoworkStorePaths(),
-): Promise<CoworkRunResult[]> {
+async function listRunFiles(jobId: string, paths: CoworkStorePaths) {
   const runDir = runDirForJob(jobId, paths);
   let entries: string[];
   try {
@@ -87,13 +84,29 @@ export async function listRunResults(
     throw error;
   }
 
-  const results = await Promise.all(
+  const runs = await Promise.all(
     entries
       .filter((entry) => entry.endsWith(".json"))
-      .map(async (entry) => readJson<CoworkRunResult>(path.join(runDir, entry), undefined as never)),
+      .map(async (entry) => {
+        const jsonFile = path.join(runDir, entry);
+        const result = await readJson<CoworkRunResult>(jsonFile, undefined as never);
+        const baseName = entry.slice(0, -".json".length);
+        return {
+          result,
+          jsonFile,
+          summaryFile: path.join(runDir, `${baseName}.summary.md`),
+        };
+      }),
   );
 
-  return results.sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt));
+  return runs.sort((a, b) => Date.parse(b.result.startedAt) - Date.parse(a.result.startedAt));
+}
+
+export async function listRunResults(
+  jobId: string,
+  paths = getCoworkStorePaths(),
+): Promise<CoworkRunResult[]> {
+  return (await listRunFiles(jobId, paths)).map((run) => run.result);
 }
 
 export async function loadLatestRunResult(
@@ -101,6 +114,64 @@ export async function loadLatestRunResult(
   paths = getCoworkStorePaths(),
 ): Promise<CoworkRunResult | undefined> {
   return (await listRunResults(jobId, paths))[0];
+}
+
+export interface CleanupRunResultsOptions {
+  keep?: number;
+  olderThanMs?: number;
+  now?: Date;
+  dryRun?: boolean;
+}
+
+export interface CleanupRunResultsResult {
+  jobId: string;
+  keptRuns: number;
+  deletedRuns: number;
+  deletedFiles: number;
+  dryRun: boolean;
+}
+
+export async function cleanupRunResults(
+  jobId: string,
+  options: CleanupRunResultsOptions,
+  paths = getCoworkStorePaths(),
+): Promise<CleanupRunResultsResult> {
+  const runs = await listRunFiles(jobId, paths);
+  const cutoff = options.olderThanMs === undefined
+    ? undefined
+    : (options.now ?? new Date()).getTime() - options.olderThanMs;
+  const keep = options.keep ?? Number.POSITIVE_INFINITY;
+  const dryRun = options.dryRun === true;
+
+  const candidates = runs.filter((run, index) => {
+    const beyondKeep = index >= keep;
+    const olderThanCutoff = cutoff !== undefined && Date.parse(run.result.startedAt) < cutoff;
+    return beyondKeep || olderThanCutoff;
+  });
+
+  let deletedFiles = 0;
+  if (!dryRun) {
+    for (const run of candidates) {
+      for (const file of [run.jsonFile, run.summaryFile]) {
+        try {
+          await fs.promises.rm(file, { force: true });
+          deletedFiles += 1;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
+      }
+    }
+  } else {
+    deletedFiles = candidates.length * 2;
+  }
+
+  return {
+    jobId,
+    keptRuns: runs.length - candidates.length,
+    deletedRuns: candidates.length,
+    deletedFiles,
+    dryRun,
+  };
 }
 
 export function formatRunSummary(result: CoworkRunResult) {

@@ -201,6 +201,7 @@ Initial commands:
 /cowork run daily-review
 /cowork runs daily-review
 /cowork last daily-review
+/cowork cleanup daily-review keep=20
 /cowork start
 /cowork stop
 /cowork enable daily-review

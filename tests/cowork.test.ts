@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { afterEach, expect, test } from "vitest";
 import { registerCoworkCommand } from "../extensions/cowork/command.js";
 import { CoworkScheduler, computeNextRunAt, isJobDue, parseIntervalMs } from "../extensions/cowork/scheduler.js";
-import { getCoworkStorePaths, loadJobs, loadState, saveJobs, saveRunResult, saveState } from "../extensions/cowork/store.js";
+import { getCoworkStorePaths, listRunResults, loadJobs, loadState, saveJobs, saveRunResult, saveState } from "../extensions/cowork/store.js";
 import type { CoworkJob } from "../extensions/cowork/types.js";
 
 const tempDirs: string[] = [];
@@ -207,6 +207,44 @@ test("cowork status includes failure and next-due details", async () => {
   expect(status).toContain("Jobs: 1 (1 enabled, 0 disabled)");
   expect(status).toContain("Failures: review(1)");
   expect(status).toContain("Next due: review=2026-06-12T11:00:00.000Z");
+});
+
+test("cowork command cleans up old runs", async () => {
+  const agentDir = makeTempDir();
+  const paths = getCoworkStorePaths(path.join(agentDir, "cowork"));
+  const command = registerCoworkForTest(agentDir);
+
+  await saveJobs([makeJob({ id: "review" })], paths);
+  for (const startedAt of [
+    "2026-06-12T09:00:00.000Z",
+    "2026-06-12T10:00:00.000Z",
+    "2026-06-12T11:00:00.000Z",
+  ]) {
+    await saveRunResult(
+      {
+        jobId: "review",
+        startedAt,
+        finishedAt: startedAt,
+        durationMs: 1,
+        exitCode: 0,
+        output: startedAt,
+        stderr: "",
+        cwd: "/repo",
+        tools: ["read"],
+      },
+      paths,
+    );
+  }
+
+  const dryRun = await command.run("cleanup review keep=1 dryRun=true");
+  expect(dryRun).toContain("Would delete 2 run(s)");
+  expect(await listRunResults("review", paths)).toHaveLength(3);
+
+  const cleanup = await command.run("cleanup review keep=1");
+  expect(cleanup).toContain("Deleted 2 run(s)");
+  const remaining = await listRunResults("review", paths);
+  expect(remaining).toHaveLength(1);
+  expect(remaining[0]?.startedAt).toBe("2026-06-12T11:00:00.000Z");
 });
 
 test("cowork command lists runs and latest run", async () => {

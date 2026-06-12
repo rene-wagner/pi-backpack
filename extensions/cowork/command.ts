@@ -3,6 +3,7 @@ import * as path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { CoworkScheduler, computeNextRunAt, parseIntervalMs } from "./scheduler.js";
 import {
+  cleanupRunResults,
   formatRunSummary,
   getCoworkStorePaths,
   listRunResults,
@@ -56,6 +57,10 @@ export function registerCoworkCommand(pi: ExtensionAPI) {
         }
         if (action === "failures") {
           ctx.ui.notify(await failuresText(), "info");
+          return;
+        }
+        if (action === "cleanup") {
+          ctx.ui.notify(await cleanupRuns(tokens), "info");
           return;
         }
         if (action === "run") {
@@ -313,6 +318,35 @@ export function registerCoworkCommand(pi: ExtensionAPI) {
       .join("\n");
   }
 
+  async function cleanupRuns(tokens: string[]) {
+    const target = tokens.shift();
+    if (!target) throw new Error("Usage: /cowork cleanup <id>|--all keep=20 [olderThan=30d] [dryRun=true]");
+    const values = parseKeyValues(tokens);
+    const keep = values.has("keep") ? Number(values.get("keep")) : undefined;
+    if (keep !== undefined && (!Number.isSafeInteger(keep) || keep < 0)) {
+      throw new Error("keep must be a non-negative integer.");
+    }
+    const olderThanMs = values.has("olderThan") ? parseIntervalMs(values.get("olderThan")!) : undefined;
+    if (keep === undefined && olderThanMs === undefined) {
+      throw new Error("cleanup requires keep=<count>, olderThan=<interval>, or both.");
+    }
+    const dryRun = values.has("dryRun") ? parseBoolean(values.get("dryRun")!, "dryRun") : false;
+
+    const jobs = await loadJobs(paths);
+    const selected = target === "--all" ? jobs : [findJob(jobs, target)];
+    if (selected.length === 0) return "No cowork jobs configured.";
+
+    const results = await Promise.all(
+      selected.map((job) => cleanupRunResults(job.id, { ...(keep !== undefined ? { keep } : {}), ...(olderThanMs !== undefined ? { olderThanMs } : {}), dryRun }, paths)),
+    );
+    const deletedRuns = results.reduce((sum, result) => sum + result.deletedRuns, 0);
+    const deletedFiles = results.reduce((sum, result) => sum + result.deletedFiles, 0);
+    return [
+      `${dryRun ? "Would delete" : "Deleted"} ${deletedRuns} run(s) and ${deletedFiles} file(s).`,
+      ...results.map((result) => `${result.jobId}: deleted=${result.deletedRuns}, kept=${result.keptRuns}`),
+    ].join("\n");
+  }
+
   async function listRuns(id: string) {
     findJob(await loadJobs(paths), id);
     const runs = await listRunResults(id, paths);
@@ -486,6 +520,7 @@ function helpText() {
     '/cowork edit <id> every=1h prompt="..." [cwd=.] [tools=read,grep,find,ls] [model=...]',
     "/cowork validate [id]",
     "/cowork failures",
+    "/cowork cleanup <id>|--all keep=20 [olderThan=30d] [dryRun=true]",
     "/cowork run <id>",
     "/cowork runs <id>",
     "/cowork last <id>",

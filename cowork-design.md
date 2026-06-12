@@ -28,6 +28,7 @@ Beispiele:
 /cowork run daily-review
 /cowork runs daily-review
 /cowork last daily-review
+/cowork cleanup daily-review keep=20
 /cowork start
 /cowork stop
 /cowork status
@@ -259,6 +260,10 @@ Stoppt den Foreground-Scheduler. Bereits laufende Runs werden im MVP nicht hart 
 
 Listet die letzten Runs bzw. zeigt die letzte Run-Summary mit Output und stderr.
 
+### `/cowork cleanup <id>|--all keep=N [olderThan=30d] [dryRun=true]`
+
+Begrenzt die Run-Historie. `keep=N` behält die neuesten N Runs, `olderThan=<interval>` löscht ältere Runs, und `dryRun=true` zeigt nur, was gelöscht würde. Gelöscht werden Run-JSON und passende Markdown-Summary gemeinsam.
+
 ### `/cowork status`
 
 Zeigt Scheduler-Status, laufende Jobs, Fehler-Zusammenfassung und nächste fällige Jobs:
@@ -293,7 +298,7 @@ Da Cowork unbeaufsichtigt laufen kann, gelten defensive Defaults:
 ## MVP Definition of Done
 
 - `extensions/cowork` existiert und ist im Package geladen.
-- `/cowork list`, `/cowork add`, `/cowork show`, `/cowork edit`, `/cowork validate`, `/cowork failures`, `/cowork run`, `/cowork runs`, `/cowork last`, `/cowork start`, `/cowork stop`, `/cowork status` funktionieren.
+- `/cowork list`, `/cowork add`, `/cowork show`, `/cowork edit`, `/cowork validate`, `/cowork failures`, `/cowork run`, `/cowork runs`, `/cowork last`, `/cowork cleanup`, `/cowork start`, `/cowork stop`, `/cowork status` funktionieren.
 - Jobs werden in `~/.pi/agent/cowork/jobs.json` gespeichert.
 - Runs werden als JSON und Markdown-Summary gespeichert.
 - Ein Job mit kurzem Intervall läuft automatisch im Foreground-Scheduler.

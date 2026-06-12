@@ -28,6 +28,7 @@ This is the foreground MVP. The scheduler only runs while the current Pi session
 /cowork edit <id> every=<interval> prompt="..." [cwd=.] [tools=read,grep,find,ls] [model=...]
 /cowork validate [id]
 /cowork failures
+/cowork cleanup <id>|--all keep=20 [olderThan=30d] [dryRun=true]
 /cowork run <id>
 /cowork runs <id>
 /cowork last <id>
@@ -90,6 +91,16 @@ Validation checks interval syntax, cwd accessibility, prompt, tools, timeout, an
 ```
 
 `/cowork runs` lists recent runs. `/cowork last` shows the latest run summary, including output and stderr.
+
+## Clean up run history
+
+```text
+/cowork cleanup daily-review keep=20
+/cowork cleanup --all keep=20
+/cowork cleanup daily-review olderThan=30d dryRun=true
+```
+
+Cleanup deletes run `.json` files and their matching `.summary.md` files. `keep=N` keeps the newest N runs. `olderThan=30d` deletes runs older than the interval. `dryRun=true` reports what would be deleted without removing files.
 
 ## Start the scheduler
 
