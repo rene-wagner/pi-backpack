@@ -121,7 +121,7 @@ export class CoworkScheduler {
     this.options.onLog?.(`Running cowork job ${job.id}...`);
 
     try {
-      const result = await runCoworkJob(job);
+      const result = await (this.options.runJob ?? runCoworkJob)(job);
       await saveRunResult(result, this.paths);
 
       jobState.lastRunAt = result.finishedAt;

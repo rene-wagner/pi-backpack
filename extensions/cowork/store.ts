@@ -154,6 +154,7 @@ export async function cleanupRunResults(
     for (const run of candidates) {
       for (const file of [run.jsonFile, run.summaryFile]) {
         try {
+          await fs.promises.access(file);
           await fs.promises.rm(file, { force: true });
           deletedFiles += 1;
         } catch (error) {

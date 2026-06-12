@@ -4,8 +4,8 @@ import * as path from "node:path";
 import { afterEach, expect, test } from "vitest";
 import { registerCoworkCommand } from "../extensions/cowork/command.js";
 import { CoworkScheduler, computeNextRunAt, isJobDue, parseIntervalMs } from "../extensions/cowork/scheduler.js";
-import { getCoworkStorePaths, listRunResults, loadJobs, loadState, saveJobs, saveRunResult, saveState } from "../extensions/cowork/store.js";
-import type { CoworkJob } from "../extensions/cowork/types.js";
+import { cleanupRunResults, getCoworkStorePaths, listRunResults, loadJobs, loadState, saveJobs, saveRunResult, saveState } from "../extensions/cowork/store.js";
+import type { CoworkJob, CoworkRunResult } from "../extensions/cowork/types.js";
 
 const tempDirs: string[] = [];
 const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -29,6 +29,21 @@ function makeJob(overrides: Partial<CoworkJob> = {}): CoworkJob {
   };
 }
 
+function makeRunResult(overrides: Partial<CoworkRunResult> = {}): CoworkRunResult {
+  return {
+    jobId: "daily-review",
+    startedAt: "2026-06-12T11:00:00.000Z",
+    finishedAt: "2026-06-12T11:00:01.000Z",
+    durationMs: 1000,
+    exitCode: 0,
+    output: "Done.",
+    stderr: "",
+    cwd: "/repo",
+    tools: ["read"],
+    ...overrides,
+  };
+}
+
 afterEach(() => {
   if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
   else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
@@ -37,6 +52,21 @@ afterEach(() => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+async function waitFor(assertion: () => void | Promise<void>) {
+  const startedAt = Date.now();
+  let lastError: unknown;
+  while (Date.now() - startedAt < 1000) {
+    try {
+      await assertion();
+      return;
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+  throw lastError;
+}
 
 function registerCoworkForTest(agentDir: string) {
   process.env.PI_CODING_AGENT_DIR = agentDir;
@@ -108,6 +138,78 @@ test("store roundtrips jobs and state", async () => {
 
   expect(await loadJobs(paths)).toEqual(jobs);
   expect(await loadState(paths)).toEqual(state);
+});
+
+test("scheduler runs due jobs with injected runner", async () => {
+  const paths = getCoworkStorePaths(makeTempDir());
+  await saveJobs([makeJob({ createdAt: "2000-01-01T00:00:00.000Z" })], paths);
+
+  const scheduler = new CoworkScheduler(paths, {
+    tickMs: 10,
+    runJob: async (job) => makeRunResult({ jobId: job.id, finishedAt: "2026-06-12T11:00:01.000Z" }),
+  });
+
+  await scheduler.tick();
+  await waitFor(async () => {
+    const state = await loadState(paths);
+    expect(state.jobs["daily-review"]?.lastExitCode).toBe(0);
+    expect(state.jobs["daily-review"]?.consecutiveFailures).toBe(0);
+    expect(state.jobs["daily-review"]?.lastRunAt).toBe("2026-06-12T11:00:01.000Z");
+    expect(state.jobs["daily-review"]?.nextRunAt).toBe("2026-06-12T12:00:01.000Z");
+  });
+});
+
+test("scheduler skips disabled jobs", async () => {
+  const paths = getCoworkStorePaths(makeTempDir());
+  let calls = 0;
+  await saveJobs([makeJob({ enabled: false, createdAt: "2000-01-01T00:00:00.000Z" })], paths);
+
+  const scheduler = new CoworkScheduler(paths, {
+    tickMs: 10,
+    runJob: async (job) => {
+      calls += 1;
+      return makeRunResult({ jobId: job.id });
+    },
+  });
+
+  await scheduler.tick();
+  expect(calls).toBe(0);
+  expect((await loadState(paths)).jobs["daily-review"]?.lastRunAt).toBeUndefined();
+});
+
+test("scheduler records failed injected runs", async () => {
+  const paths = getCoworkStorePaths(makeTempDir());
+  await saveJobs([makeJob()], paths);
+
+  const scheduler = new CoworkScheduler(paths, {
+    tickMs: 10,
+    runJob: async (job) => makeRunResult({ jobId: job.id, exitCode: 1, stderr: "Boom" }),
+  });
+
+  await scheduler.runNow("daily-review");
+  const state = await loadState(paths);
+  expect(state.jobs["daily-review"]?.lastExitCode).toBe(1);
+  expect(state.jobs["daily-review"]?.lastError).toBe("Boom");
+  expect(state.jobs["daily-review"]?.consecutiveFailures).toBe(1);
+});
+
+test("scheduler prevents concurrent runs for the same job", async () => {
+  const paths = getCoworkStorePaths(makeTempDir());
+  let resolveRun: ((value: CoworkRunResult) => void) | undefined;
+  await saveJobs([makeJob()], paths);
+
+  const scheduler = new CoworkScheduler(paths, {
+    tickMs: 10,
+    runJob: (job) => new Promise<CoworkRunResult>((resolve) => {
+      resolveRun = () => resolve(makeRunResult({ jobId: job.id }));
+    }),
+  });
+
+  const firstRun = scheduler.runNow("daily-review");
+  await waitFor(() => expect(scheduler.getRunningJobIds()).toEqual(["daily-review"]));
+  await expect(scheduler.runNow("daily-review")).rejects.toThrow(/already running/);
+  resolveRun?.(makeRunResult());
+  await firstRun;
 });
 
 test("scheduler records invalid jobs without throwing", async () => {
@@ -207,6 +309,16 @@ test("cowork status includes failure and next-due details", async () => {
   expect(status).toContain("Jobs: 1 (1 enabled, 0 disabled)");
   expect(status).toContain("Failures: review(1)");
   expect(status).toContain("Next due: review=2026-06-12T11:00:00.000Z");
+});
+
+test("cleanup counts only existing files", async () => {
+  const paths = getCoworkStorePaths(makeTempDir());
+  const files = await saveRunResult(makeRunResult({ startedAt: "2026-06-12T09:00:00.000Z" }), paths);
+  fs.rmSync(files.summaryFile);
+
+  const result = await cleanupRunResults("daily-review", { keep: 0 }, paths);
+  expect(result.deletedRuns).toBe(1);
+  expect(result.deletedFiles).toBe(1);
 });
 
 test("cowork command cleans up old runs", async () => {

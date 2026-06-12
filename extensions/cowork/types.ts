@@ -57,6 +57,7 @@ export interface CoworkRunOptions {
 export interface CoworkSchedulerOptions {
   tickMs?: number;
   onLog?: (message: string) => void;
+  runJob?: (job: CoworkJob) => Promise<CoworkRunResult>;
 }
 
 export const DEFAULT_COWORK_TOOLS = ["read", "grep", "find", "ls"];
