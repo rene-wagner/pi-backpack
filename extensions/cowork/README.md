@@ -24,8 +24,8 @@ This is the foreground MVP. The scheduler only runs while the current Pi session
 /cowork status
 /cowork list
 /cowork show <id>
-/cowork add <id> every=<interval> prompt="..." [cwd=.] [tools=read,grep,find,ls] [model=...] [retryAfter=10m] [maxFailures=5] [runOnStart=true]
-/cowork edit <id> every=<interval> prompt="..." [cwd=.] [tools=read,grep,find,ls] [model=...] [retryAfter=10m] [maxFailures=5]
+/cowork add <id> every=<interval> prompt="..." [cwd=.] [tools=read,grep,find,ls] [model=...] [retryAfter=10m] [maxFailures=5] [notify=failures] [runOnStart=true]
+/cowork edit <id> every=<interval> prompt="..." [cwd=.] [tools=read,grep,find,ls] [model=...] [retryAfter=10m] [maxFailures=5] [notify=always]
 /cowork validate [id]
 /cowork failures
 /cowork cleanup <id>|--all keep=20 [olderThan=30d] [dryRun=true]
@@ -76,6 +76,16 @@ Use `model=default`, `model=none`, or an empty `model=` value to remove the expl
 
 When a run fails, `retryAfter` sets the next run to the failure time plus that interval. Without it, failures use the normal `every` interval. `maxFailures` automatically disables a job after that many consecutive failures.
 
+## Notifications
+
+```text
+/cowork edit daily-review notify=failures
+/cowork edit daily-review notify=always
+/cowork edit daily-review notify=never
+```
+
+Notifications are foreground-session custom messages sent while `/cowork start` is active. `notify=failures` reports failed runs, `notify=always` reports every completed run, and `notify=never` disables notifications.
+
 ## Validate jobs and inspect failures
 
 ```text
@@ -85,7 +95,7 @@ When a run fails, `retryAfter` sets the next run to the failure time plus that i
 /cowork status
 ```
 
-Validation checks interval syntax, cwd accessibility, prompt, tools, timeout, retry settings, and supported concurrency. Status includes scheduler state, running jobs, failed jobs, and the next due jobs.
+Validation checks interval syntax, cwd accessibility, prompt, tools, timeout, retry settings, notification mode, and supported concurrency. Status includes scheduler state, running jobs, failed jobs, and the next due jobs.
 
 ## Run a job manually
 
@@ -139,6 +149,7 @@ The scheduler checks for due jobs periodically. Stop it with:
 - `timeoutMs`: 30 minutes
 - `retryAfter`: not set; failures use normal `every`
 - `maxFailures`: not set; jobs are not auto-disabled
+- `notify`: `never`
 - `concurrency`: `skip`
 - `runOnStart`: `false`
 

@@ -136,6 +136,7 @@ export class CoworkScheduler {
         jobState.consecutiveFailures += 1;
         await applyFailurePolicy(job, jobState, this.paths, result.finishedAt);
       }
+      await this.options.onRunComplete?.(job, result, jobState);
       return result;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -144,6 +145,7 @@ export class CoworkScheduler {
       jobState.lastError = message;
       jobState.consecutiveFailures += 1;
       await applyFailurePolicy(job, jobState, this.paths, jobState.lastRunAt);
+      await this.options.onRunError?.(job, error instanceof Error ? error : new Error(message), jobState);
       throw error;
     } finally {
       jobState.running = false;

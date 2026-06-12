@@ -72,15 +72,20 @@ function registerCoworkForTest(agentDir: string) {
   process.env.PI_CODING_AGENT_DIR = agentDir;
   let handler: ((args: string, ctx: { cwd: string; ui: { notify: (message: string, level?: string) => void } }) => Promise<void>) | undefined;
   const messages: Array<{ message: string; level?: string }> = [];
+  const sentMessages: unknown[] = [];
 
   registerCoworkCommand({
     registerCommand: (_name: string, options: { handler: typeof handler }) => {
       handler = options.handler;
     },
+    sendMessage: (message: unknown) => {
+      sentMessages.push(message);
+    },
   } as never);
 
   return {
     messages,
+    sentMessages,
     async run(args: string, cwd = agentDir) {
       if (!handler) throw new Error("cowork command was not registered");
       await handler(args, {
@@ -224,6 +229,23 @@ test("scheduler records failed injected runs", async () => {
   expect(state.jobs["daily-review"]?.consecutiveFailures).toBe(1);
 });
 
+test("scheduler notifies on completed runs", async () => {
+  const paths = getCoworkStorePaths(makeTempDir());
+  const notifications: string[] = [];
+  await saveJobs([makeJob({ notify: "failures" })], paths);
+
+  const scheduler = new CoworkScheduler(paths, {
+    tickMs: 10,
+    runJob: async (job) => makeRunResult({ jobId: job.id, exitCode: 1, stderr: "Boom" }),
+    onRunComplete: (job, result) => {
+      notifications.push(`${job.id}:${result.exitCode}`);
+    },
+  });
+
+  await scheduler.runNow("daily-review");
+  expect(notifications).toEqual(["daily-review:1"]);
+});
+
 test("scheduler prevents concurrent runs for the same job", async () => {
   const paths = getCoworkStorePaths(makeTempDir());
   let resolveRun: ((value: CoworkRunResult) => void) | undefined;
@@ -259,7 +281,7 @@ test("cowork command adds, shows, and edits jobs", async () => {
   const agentDir = makeTempDir();
   const command = registerCoworkForTest(agentDir);
 
-  await command.run('add review every=1h cwd=. model=sonnet:high tools=read,grep retryAfter=10m maxFailures=3 prompt="Review local changes" runOnStart=true');
+  await command.run('add review every=1h cwd=. model=sonnet:high tools=read,grep retryAfter=10m maxFailures=3 notify=failures prompt="Review local changes" runOnStart=true');
   let jobs = await loadJobs(getCoworkStorePaths(path.join(agentDir, "cowork")));
   expect(jobs[0]).toMatchObject({
     id: "review",
@@ -269,6 +291,7 @@ test("cowork command adds, shows, and edits jobs", async () => {
     prompt: "Review local changes",
     retryAfter: "10m",
     maxFailures: 3,
+    notify: "failures",
     runOnStart: true,
   });
 
@@ -276,14 +299,16 @@ test("cowork command adds, shows, and edits jobs", async () => {
   expect(showBefore).toContain("Model: sonnet:high");
   expect(showBefore).toContain("Retry after: 10m");
   expect(showBefore).toContain("Max failures: 3");
+  expect(showBefore).toContain("Notify: failures");
   expect(showBefore).toContain("Prompt:\nReview local changes");
 
-  await command.run('edit review every=2h model=default tools=read,find retryAfter=none maxFailures=unlimited prompt="New prompt" enabled=false');
+  await command.run('edit review every=2h model=default tools=read,find retryAfter=none maxFailures=unlimited notify=always prompt="New prompt" enabled=false');
   jobs = await loadJobs(getCoworkStorePaths(path.join(agentDir, "cowork")));
   expect(jobs[0]).toMatchObject({ every: "2h", tools: ["read", "find"], prompt: "New prompt", enabled: false });
   expect(jobs[0]?.model).toBeUndefined();
   expect(jobs[0]?.retryAfter).toBeUndefined();
   expect(jobs[0]?.maxFailures).toBeUndefined();
+  expect(jobs[0]?.notify).toBe("always");
 });
 
 test("cowork command validates jobs and reports failures", async () => {
@@ -294,7 +319,7 @@ test("cowork command validates jobs and reports failures", async () => {
   await saveJobs(
     [
       makeJob({ id: "valid", cwd: agentDir, tools: ["read"], retryAfter: "10m", maxFailures: 3 }),
-      makeJob({ id: "broken", cwd: path.join(agentDir, "missing"), every: "bad", retryAfter: "bad", maxFailures: 0, prompt: "", tools: [] }),
+      makeJob({ id: "broken", cwd: path.join(agentDir, "missing"), every: "bad", retryAfter: "bad", maxFailures: 0, notify: "sometimes" as never, prompt: "", tools: [] }),
     ],
     paths,
   );
@@ -317,6 +342,7 @@ test("cowork command validates jobs and reports failures", async () => {
   expect(validation).toContain("✗ broken");
   expect(validation).toContain("Invalid interval");
   expect(validation).toContain("maxFailures must be a positive integer");
+  expect(validation).toContain("notify must be one of");
   expect(validation).toContain("cwd does not exist");
 
   const failures = await command.run("failures");

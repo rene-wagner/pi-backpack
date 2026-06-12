@@ -22,7 +22,7 @@ Beispiele:
 /cowork add
 /cowork list
 /cowork show daily-review
-/cowork edit daily-review model=sonnet:high every=1h retryAfter=10m maxFailures=5
+/cowork edit daily-review model=sonnet:high every=1h retryAfter=10m maxFailures=5 notify=failures
 /cowork validate daily-review
 /cowork failures
 /cowork run daily-review
@@ -206,7 +206,7 @@ MVP: zunächst argumentbasiert oder interaktiv minimal.
 Mögliche einfache Syntax:
 
 ```text
-/cowork add daily-review every=24h retryAfter=30m maxFailures=5 cwd=. tools=read,grep,find,bash prompt="Review local changes"
+/cowork add daily-review every=24h retryAfter=30m maxFailures=5 notify=failures cwd=. tools=read,grep,find,bash prompt="Review local changes"
 ```
 
 Wenn keine Argumente angegeben sind, kann später ein UI-Wizard folgen.
@@ -217,8 +217,8 @@ Aktualisiert einzelne Job-Felder, z. B.:
 
 ```text
 /cowork edit daily-review model=sonnet:high every=1h
-/cowork edit daily-review retryAfter=10m maxFailures=5
-/cowork edit daily-review retryAfter=none maxFailures=unlimited
+/cowork edit daily-review retryAfter=10m maxFailures=5 notify=failures
+/cowork edit daily-review retryAfter=none maxFailures=unlimited notify=never
 /cowork edit daily-review tools=read,grep,find,bash
 /cowork edit daily-review prompt="New prompt"
 ```
@@ -234,6 +234,18 @@ maxFailures=5
 
 Nach einem fehlgeschlagenen Run setzt `retryAfter` den nächsten Lauf auf Fehlerzeit + Intervall. `maxFailures` deaktiviert einen Job nach N aufeinanderfolgenden Fehlern automatisch.
 
+### Notifications
+
+Optional kann ein Job Foreground-Session-Nachrichten senden:
+
+```text
+notify=never
+notify=failures
+notify=always
+```
+
+`notify=failures` meldet fehlgeschlagene Runs, `notify=always` jeden abgeschlossenen Run. Notifications erscheinen nur, während die Cowork-Extension in der aktuellen Pi-Session läuft.
+
 ### `/cowork validate [id]`
 
 Prüft Job-Konfigurationen vor unbeaufsichtigten Läufen:
@@ -245,6 +257,7 @@ Prüft Job-Konfigurationen vor unbeaufsichtigten Läufen:
 - valider Timeout
 - gültiges `retryAfter`
 - valides `maxFailures`
+- valider `notify`-Modus
 - unterstützte Concurrency
 
 ### `/cowork failures`

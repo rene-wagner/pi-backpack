@@ -16,6 +16,9 @@ import {
   DEFAULT_COWORK_TIMEOUT_MS,
   DEFAULT_COWORK_TOOLS,
   type CoworkJob,
+  type CoworkJobState,
+  type CoworkNotify,
+  type CoworkRunResult,
 } from "./types.js";
 
 let scheduler: CoworkScheduler | undefined;
@@ -124,6 +127,8 @@ export function registerCoworkCommand(pi: ExtensionAPI) {
   function ensureScheduler() {
     scheduler ??= new CoworkScheduler(paths, {
       onLog: (message) => undefined,
+      onRunComplete: (job, result, state) => sendRunNotification(job, result, state),
+      onRunError: (job, error, state) => sendRunErrorNotification(job, error, state),
     });
     return scheduler;
   }
@@ -162,6 +167,7 @@ export function registerCoworkCommand(pi: ExtensionAPI) {
       `Timeout: ${job.timeoutMs ?? DEFAULT_COWORK_TIMEOUT_MS} ms`,
       `Retry after: ${job.retryAfter ?? "default interval"}`,
       `Max failures: ${job.maxFailures ?? "unlimited"}`,
+      `Notify: ${job.notify ?? "never"}`,
       `Run on start: ${job.runOnStart === true}`,
       `Concurrency: ${job.concurrency ?? "skip"}`,
       `Created: ${job.createdAt}`,
@@ -251,6 +257,7 @@ export function registerCoworkCommand(pi: ExtensionAPI) {
       timeoutMs,
       ...(retryAfter !== undefined ? { retryAfter } : {}),
       ...(maxFailures !== undefined ? { maxFailures } : {}),
+      notify: parseNotify(values.get("notify") ?? "never"),
       runOnStart: values.get("runOnStart") === "true",
       concurrency: "skip",
       createdAt: now,
@@ -373,6 +380,45 @@ export function registerCoworkCommand(pi: ExtensionAPI) {
     if (!run) return `No runs recorded for cowork job ${id}.`;
     return formatRunSummary(run);
   }
+
+  function sendRunNotification(job: CoworkJob, result: CoworkRunResult, state: CoworkJobState) {
+    if (!shouldNotify(job, result.exitCode !== 0)) return;
+    const status = result.exitCode === 0 ? "succeeded" : "failed";
+    const disabled = job.enabled ? "" : " Job was disabled.";
+    pi.sendMessage(
+      {
+        customType: "cowork-notification",
+        content: `Cowork job ${job.id} ${status} with exit code ${result.exitCode}.${disabled}`,
+        display: true,
+        details: {
+          jobId: job.id,
+          exitCode: result.exitCode,
+          consecutiveFailures: state.consecutiveFailures,
+          lastError: state.lastError,
+          nextRunAt: state.nextRunAt,
+        },
+      },
+      { deliverAs: "nextTurn" },
+    );
+  }
+
+  function sendRunErrorNotification(job: CoworkJob, error: Error, state: CoworkJobState) {
+    if (!shouldNotify(job, true)) return;
+    pi.sendMessage(
+      {
+        customType: "cowork-notification",
+        content: `Cowork job ${job.id} failed: ${error.message}`,
+        display: true,
+        details: {
+          jobId: job.id,
+          consecutiveFailures: state.consecutiveFailures,
+          lastError: state.lastError,
+          nextRunAt: state.nextRunAt,
+        },
+      },
+      { deliverAs: "nextTurn" },
+    );
+  }
 }
 
 function findJob(jobs: CoworkJob[], id: string) {
@@ -409,6 +455,7 @@ async function validateJob(job: CoworkJob) {
   if (job.maxFailures !== undefined && (!Number.isSafeInteger(job.maxFailures) || job.maxFailures <= 0)) {
     issues.push("maxFailures must be a positive integer");
   }
+  if (!isNotifyValue(job.notify ?? "never")) issues.push('notify must be one of: never, failures, always');
   if ((job.concurrency ?? "skip") !== "skip") issues.push('MVP only supports concurrency="skip"');
 
   try {
@@ -424,7 +471,7 @@ async function validateJob(job: CoworkJob) {
 
 function applyJobValues(job: CoworkJob, values: Map<string, string>, defaultCwd: string) {
   for (const key of values.keys()) {
-    if (!["enabled", "every", "prompt", "cwd", "model", "tools", "timeoutMs", "retryAfter", "maxFailures", "runOnStart", "concurrency"].includes(key)) {
+    if (!["enabled", "every", "prompt", "cwd", "model", "tools", "timeoutMs", "retryAfter", "maxFailures", "notify", "runOnStart", "concurrency"].includes(key)) {
       throw new Error(`Unsupported cowork job field "${key}".`);
     }
   }
@@ -475,6 +522,8 @@ function applyJobValues(job: CoworkJob, values: Map<string, string>, defaultCwd:
       job.maxFailures = parsed;
     }
   }
+  const notify = values.get("notify");
+  if (notify !== undefined) job.notify = parseNotify(notify);
   const enabled = values.get("enabled");
   if (enabled !== undefined) job.enabled = parseBoolean(enabled, "enabled");
   const runOnStart = values.get("runOnStart");
@@ -484,6 +533,20 @@ function applyJobValues(job: CoworkJob, values: Map<string, string>, defaultCwd:
     throw new Error('MVP only supports concurrency="skip".');
   }
   if (concurrency === "skip") job.concurrency = "skip";
+}
+
+function shouldNotify(job: CoworkJob, failed: boolean) {
+  const notify = job.notify ?? "never";
+  return notify === "always" || (notify === "failures" && failed);
+}
+
+function isNotifyValue(value: string): value is CoworkNotify {
+  return value === "never" || value === "failures" || value === "always";
+}
+
+function parseNotify(value: string): CoworkNotify {
+  if (isNotifyValue(value)) return value;
+  throw new Error('notify must be one of: never, failures, always.');
 }
 
 function parseBoolean(value: string, field: string) {
@@ -553,8 +616,8 @@ function helpText() {
     "Usage:",
     "/cowork list",
     "/cowork show <id>",
-    '/cowork add <id> every=1h prompt="..." [cwd=.] [tools=read,grep,find,ls] [model=...] [retryAfter=10m] [maxFailures=5] [runOnStart=true]',
-    '/cowork edit <id> every=1h prompt="..." [cwd=.] [tools=read,grep,find,ls] [model=...] [retryAfter=10m] [maxFailures=5]',
+    '/cowork add <id> every=1h prompt="..." [cwd=.] [tools=read,grep,find,ls] [model=...] [retryAfter=10m] [maxFailures=5] [notify=failures] [runOnStart=true]',
+    '/cowork edit <id> every=1h prompt="..." [cwd=.] [tools=read,grep,find,ls] [model=...] [retryAfter=10m] [maxFailures=5] [notify=always]',
     "/cowork validate [id]",
     "/cowork failures",
     "/cowork cleanup <id>|--all keep=20 [olderThan=30d] [dryRun=true]",

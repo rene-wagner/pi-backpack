@@ -194,8 +194,8 @@ Initial commands:
 /cowork status
 /cowork list
 /cowork show daily-review
-/cowork add daily-review every=24h retryAfter=30m maxFailures=5 cwd=. tools=read,grep,find,bash prompt="Review local changes and summarize risks."
-/cowork edit daily-review model=sonnet:high every=1h retryAfter=10m
+/cowork add daily-review every=24h retryAfter=30m maxFailures=5 notify=failures cwd=. tools=read,grep,find,bash prompt="Review local changes and summarize risks."
+/cowork edit daily-review model=sonnet:high every=1h retryAfter=10m notify=always
 /cowork validate daily-review
 /cowork failures
 /cowork run daily-review

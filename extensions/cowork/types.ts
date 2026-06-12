@@ -1,4 +1,5 @@
 export type CoworkConcurrency = "skip" | "queue" | "parallel";
+export type CoworkNotify = "never" | "failures" | "always";
 
 export interface CoworkJob {
   id: string;
@@ -11,6 +12,7 @@ export interface CoworkJob {
   timeoutMs?: number;
   retryAfter?: string;
   maxFailures?: number;
+  notify?: CoworkNotify;
   runOnStart?: boolean;
   concurrency?: CoworkConcurrency;
   createdAt: string;
@@ -60,6 +62,8 @@ export interface CoworkSchedulerOptions {
   tickMs?: number;
   onLog?: (message: string) => void;
   runJob?: (job: CoworkJob) => Promise<CoworkRunResult>;
+  onRunComplete?: (job: CoworkJob, result: CoworkRunResult, state: CoworkJobState) => void | Promise<void>;
+  onRunError?: (job: CoworkJob, error: Error, state: CoworkJobState) => void | Promise<void>;
 }
 
 export const DEFAULT_COWORK_TOOLS = ["read", "grep", "find", "ls"];
