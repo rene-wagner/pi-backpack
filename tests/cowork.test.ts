@@ -1,8 +1,11 @@
+import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { PassThrough } from "node:stream";
 import { afterEach, expect, test } from "vitest";
 import { registerCoworkCommand } from "../extensions/cowork/command.js";
+import { runCoworkJob, type SpawnCoworkProcess } from "../extensions/cowork/runner.js";
 import { CoworkScheduler, computeNextRunAt, isJobDue, parseIntervalMs } from "../extensions/cowork/scheduler.js";
 import { cleanupRunResults, getCoworkStorePaths, listRunResults, loadJobs, loadState, saveJobs, saveRunResult, saveState } from "../extensions/cowork/store.js";
 import type { CoworkJob, CoworkRunResult } from "../extensions/cowork/types.js";
@@ -26,6 +29,29 @@ function makeJob(overrides: Partial<CoworkJob> = {}): CoworkJob {
     createdAt: "2026-06-12T10:00:00.000Z",
     updatedAt: "2026-06-12T10:00:00.000Z",
     ...overrides,
+  };
+}
+
+class FakeCoworkProcess extends EventEmitter {
+  stdout = new PassThrough();
+  stderr = new PassThrough();
+  killedWith: Array<NodeJS.Signals | number | undefined> = [];
+
+  kill(signal?: NodeJS.Signals | number) {
+    this.killedWith.push(signal);
+    this.emit("killed", signal);
+    return true;
+  }
+
+  close(code: number | null) {
+    this.emit("close", code);
+  }
+}
+
+function makeFakeSpawn(process: FakeCoworkProcess, calls: Array<{ command: string; args: string[]; cwd: string }> = []): SpawnCoworkProcess {
+  return (command, args, options) => {
+    calls.push({ command, args, cwd: options.cwd });
+    return process;
   };
 }
 
@@ -143,6 +169,95 @@ test("store roundtrips jobs and state", async () => {
 
   expect(await loadJobs(paths)).toEqual(jobs);
   expect(await loadState(paths)).toEqual(state);
+});
+
+test("runner passes expected pi json-mode arguments", async () => {
+  const child = new FakeCoworkProcess();
+  const calls: Array<{ command: string; args: string[]; cwd: string }> = [];
+  const promise = runCoworkJob(
+    makeJob({ cwd: "/repo", model: "sonnet:high", tools: ["read", "grep"], prompt: "Say OK" }),
+    { spawnProcess: makeFakeSpawn(child, calls) },
+  );
+
+  child.close(0);
+  await promise;
+
+  expect(calls[0]?.cwd).toBe("/repo");
+  expect(calls[0]?.args).toEqual(expect.arrayContaining(["--mode", "json", "-p", "--no-session", "--tools", "read,grep", "--model", "sonnet:high", "Say OK"]));
+});
+
+test("runner extracts assistant message_end output", async () => {
+  const child = new FakeCoworkProcess();
+  const promise = runCoworkJob(makeJob(), { spawnProcess: makeFakeSpawn(child) });
+
+  child.stdout.write(`${JSON.stringify({
+    type: "message_end",
+    message: { role: "assistant", content: [{ type: "text", text: "OK" }], stopReason: "stop" },
+  })}\n`);
+  child.close(0);
+
+  await expect(promise).resolves.toMatchObject({ exitCode: 0, output: "OK" });
+});
+
+test("runner converts assistant error stopReason to failed result", async () => {
+  const child = new FakeCoworkProcess();
+  const promise = runCoworkJob(makeJob(), { spawnProcess: makeFakeSpawn(child) });
+
+  child.stdout.write(`${JSON.stringify({
+    type: "message_end",
+    message: {
+      role: "assistant",
+      content: [{ type: "text", text: "Partial" }],
+      stopReason: "error",
+      errorMessage: "Provider failed",
+    },
+  })}\n`);
+  child.close(0);
+
+  const result = await promise;
+  expect(result.exitCode).toBe(1);
+  expect(result.output).toBe("Partial");
+  expect(result.stderr).toContain("Provider failed");
+});
+
+test("runner captures stderr and truncates large output", async () => {
+  const child = new FakeCoworkProcess();
+  const promise = runCoworkJob(makeJob(), { spawnProcess: makeFakeSpawn(child) });
+
+  child.stdout.write(`${JSON.stringify({
+    type: "message_end",
+    message: { role: "assistant", content: [{ type: "text", text: "x".repeat(21_000) }], stopReason: "stop" },
+  })}\n`);
+  child.stderr.write("warning");
+  child.close(0);
+
+  const result = await promise;
+  expect(result.stderr).toContain("warning");
+  expect(result.output.length).toBeLessThan(21_000);
+  expect(result.output).toContain("[truncated");
+});
+
+test("runner records spawn errors as failed results", async () => {
+  const child = new FakeCoworkProcess();
+  const promise = runCoworkJob(makeJob(), { spawnProcess: makeFakeSpawn(child) });
+
+  child.emit("error", new Error("spawn failed"));
+
+  await expect(promise).resolves.toMatchObject({ exitCode: 1, stderr: "spawn failed" });
+});
+
+test("runner times out and kills the process", async () => {
+  const child = new FakeCoworkProcess();
+  child.on("killed", () => child.close(0));
+
+  const result = await runCoworkJob(
+    makeJob({ timeoutMs: 1 }),
+    { spawnProcess: makeFakeSpawn(child) },
+  );
+
+  expect(child.killedWith).toContain("SIGTERM");
+  expect(result.exitCode).toBe(130);
+  expect(result.stderr).toContain("timed out");
 });
 
 test("scheduler runs due jobs with injected runner", async () => {
